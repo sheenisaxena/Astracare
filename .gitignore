@@ -16,3 +16,24 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Kotlin 2.x per-project session data
+.kotlin/
+
+# Build artefacts
+*.apk
+*.aab
+*.hprof
+
+# Signing material — a keystore committed to a public repo lets anyone publish an
+# update signed as this app. There is no way to un-leak one: the key must be
+# rotated, and for a Play-published app that is effectively unrecoverable.
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# Credentials
+secrets.properties
+apikeys.properties
+google-services.json

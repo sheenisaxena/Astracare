@@ -12,7 +12,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.astracare.ui.theme.AstracareTheme
+import dagger.hilt.android.AndroidEntryPoint
 
+/**
+ * [AndroidEntryPoint] makes this activity a member of the Hilt graph so that
+ * `hiltViewModel()` can resolve ViewModels in the composables it hosts.
+ * Without it, injection into any ViewModel scoped to this activity fails at runtime.
+ */
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

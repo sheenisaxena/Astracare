@@ -1,4 +1,9 @@
 pluginManagement {
+    // Convention plugins live in a separate included build. This must be inside
+    // pluginManagement (not a top-level includeBuild) for the astracare.* plugin ids to
+    // be resolvable from module build scripts.
+    includeBuild("build-logic")
+
     repositories {
         google {
             content {
@@ -41,4 +46,4 @@ include(":core:designsystem")   // Compose M3 theme + shared components
 
 include(":feature:patients")    // capture screen, history list, MVI ViewModel
 
-// :macrobenchmark added in Week 5 (Day 21)
+// :macrobenchmark is added alongside the performance work

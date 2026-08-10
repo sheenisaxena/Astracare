@@ -1,32 +1,17 @@
 plugins {
-    alias(libs.plugins.android.library)
+    id("astracare.android.library")
+    id("astracare.android.compose")
+    id("astracare.android.hilt")
 }
 
 android {
     namespace = "com.astracare.feature.patients"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
-
-    defaultConfig {
-        minSdk = 24
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-
 }
 
 dependencies {
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.material)
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.junit)
+    // Explicit project paths rather than the projects.* type-safe accessors, which rely on
+    // a feature-preview flag whose stability varies by Gradle version.
+    implementation(project(":core:model"))
+    implementation(project(":core:domain"))
+    implementation(project(":core:designsystem"))
 }
