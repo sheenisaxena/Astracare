@@ -322,7 +322,7 @@ badge. Unit tests, ktlint and detekt run on every push; instrumented tests run l
 | Item | Status | Resolve by |
 |---|---|---|
 | Move `DispatchersModule` to `:core:common` via `hilt-core` | Known debt (2.5) | Before cross-module DI lands |
-| detekt 1.23.8 is built against Kotlin 2.0.21, project is on 2.2.10 | Unresolved compatibility risk | Before CI is wired |
+| ~~detekt 1.23.8 vs Kotlin 2.2.10 compatibility~~ | **Resolved** — detekt parses Kotlin 2.2.10 without error; its embedded compiler handles the newer syntax | Closed |
 | `android.disallowKotlinSourceSets=false` required — KSP registers generated sources via `kotlin.sourceSets`, which AGP 9 rejects (3.5) | Third-party tooling gap | When KSP supports AGP 9 built-in Kotlin |
 | Conflict-resolution strategy (last-write-wins vs vector clocks) | Not yet decided | With the sync engine |
 | SQLCipher vs Jetpack Security for field-level encryption | Not yet decided | With PII encryption |

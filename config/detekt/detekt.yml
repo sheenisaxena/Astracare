@@ -22,7 +22,10 @@ formatting:
   # needs no separate ktlint plugin.
   active: true
   android: true
-  autoCorrect: false
+  # Permits these rules to rewrite files, but ONLY when the task is invoked with
+  # --auto-correct. Plain `./gradlew detekt` (what CI runs) still just reports.
+  # So: `./gradlew detekt --auto-correct` locally, read-only verification in CI.
+  autoCorrect: true
 
   MaximumLineLength:
     active: true
@@ -52,6 +55,12 @@ naming:
     constantPattern: '[A-Z][_A-Za-z0-9]*'
 
 style:
+  # Redundant with formatting/FinalNewline (ktlint), which checks the same thing and can fix
+  # it automatically. Two rules for one problem means two errors per file and a confusing
+  # report. Keep the auto-fixable one.
+  NewLineAtEndOfFile:
+    active: false
+
   MagicNumber:
     active: true
     excludes:
