@@ -51,7 +51,15 @@ detekt = "1.23.8"
 android-gradlePlugin = { group = "com.android.tools.build", name = "gradle", version.ref = "agp" }
 kotlin-gradlePlugin = { group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin", version.ref = "kotlin" }
 ksp-gradlePlugin = { group = "com.google.devtools.ksp", name = "symbol-processing-gradle-plugin", version.ref = "ksp" }
+# Two DIFFERENT detekt artifacts. Same group and version, different name — not a duplicate:
+#   detekt-gradle-plugin -> the Gradle plugin. compileOnly in build-logic, so the convention
+#                           plugin can reference the Detekt task and DetektExtension types.
+#   detekt-formatting    -> the ktlint rule set. Added to the `detektPlugins` configuration of
+#                           every module. Without it the `formatting:` block in detekt.yml is
+#                           silently inert and no ktlint rules run.
+# They must share version.ref: detekt rejects a rule set whose version differs from its core.
 detekt-gradlePlugin = { group = "io.gitlab.arturbosch.detekt", name = "detekt-gradle-plugin", version.ref = "detekt" }
+detekt-formatting = { group = "io.gitlab.arturbosch.detekt", name = "detekt-formatting", version.ref = "detekt" }
 
 # --- AndroidX core / UI ---
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

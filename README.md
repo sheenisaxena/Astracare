@@ -1,5 +1,7 @@
 # AstraCare
 
+[![CI](https://github.com/sheenisaxena/Astracare/actions/workflows/ci.yml/badge.svg)](https://github.com/sheenisaxena/Astracare/actions/workflows/ci.yml)
+
 An offline-first Android field data capture app for community health workers operating in
 low-bandwidth and intermittently connected environments.
 

@@ -17,6 +17,7 @@ import org.gradle.kotlin.dsl.dependencies
 class AndroidApplicationConventionPlugin : Plugin<Project> {
     override fun apply(target: Project) = with(target) {
         pluginManager.apply("com.android.application")
+        pluginManager.apply("astracare.detekt")
 
         extensions.configure<ApplicationExtension> {
             compileSdk = AndroidSdk.COMPILE_SDK

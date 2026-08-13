@@ -1,0 +1,94 @@
+# detekt configuration for AstraCare.
+#
+# `buildUponDefaultConfig = true` is set in the convention plugin, so this file only needs
+# to declare DIFFERENCES from detekt's defaults. Copying the full default config here would
+# mean silently pinning hundreds of rules to their 1.23.8 values, and every future detekt
+# upgrade would ship new rules that never activate.
+
+build:
+  # Zero tolerance. A warning budget above zero is a budget that always gets spent, and the
+  # count only ever ratchets upward. If a rule is wrong for this project, disable the rule
+  # deliberately rather than allowing N unexplained violations.
+  maxIssues: 0
+
+config:
+  # Fail if this file references rules that no longer exist — catches silent no-ops after a
+  # detekt upgrade.
+  validation: true
+  warningsAsErrors: false
+
+formatting:
+  # Supplied by detekt-formatting, which wraps ktlint's rule set. This is why the project
+  # needs no separate ktlint plugin.
+  active: true
+  android: true
+  autoCorrect: false
+
+  MaximumLineLength:
+    active: true
+    maxLineLength: 120
+
+  # Compose imports are frequently wildcard-free but long; the default ordering rule is fine.
+  ImportOrdering:
+    active: true
+
+  # Trailing commas make diffs cleaner when adding parameters — a one-line change instead of
+  # two. Kotlin supports them; ktlint's default does not enforce them.
+  TrailingCommaOnCallSite:
+    active: true
+  TrailingCommaOnDeclarationSite:
+    active: true
+
+naming:
+  FunctionNaming:
+    active: true
+    # Composable functions are PascalCase by convention, which violates the standard Kotlin
+    # function-naming rule. Without this exclusion every composable is a detekt failure.
+    ignoreAnnotated: ['Composable']
+
+  TopLevelPropertyNaming:
+    active: true
+    # Compose theme tokens (Purple80, PurpleGrey40) are PascalCase by convention.
+    constantPattern: '[A-Z][_A-Za-z0-9]*'
+
+style:
+  MagicNumber:
+    active: true
+    excludes:
+      - '**/test/**'
+      - '**/androidTest/**'
+      # Colour literals and dimension tokens are inherently numeric.
+      - '**/ui/theme/**'
+      - '**/designsystem/**'
+
+  MaxLineLength:
+    active: true
+    maxLineLength: 120
+
+  # Explicit `return Unit` style noise; defaults are fine but called out as intentional.
+  ForbiddenComment:
+    active: true
+    # TODO without an owner or issue reference rots. Require context.
+    comments:
+      - reason: 'Track the work rather than leaving an unattributed marker.'
+        value: 'TODO:'
+    excludes:
+      - '**/test/**'
+
+complexity:
+  LongParameterList:
+    # Compose functions legitimately take many parameters (state + callbacks + modifier).
+    functionThreshold: 8
+    constructorThreshold: 8
+    ignoreAnnotated: ['Composable']
+
+  TooManyFunctions:
+    # A design-system file may expose many small composables.
+    ignoreAnnotatedFunctions: ['Composable']
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: true
+  SwallowedException:
+    # A caught-and-ignored exception in sync/retry code is how silent data loss happens.
+    active: true

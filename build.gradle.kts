@@ -11,4 +11,6 @@ plugins {
     alias(libs.plugins.jetbrains.kotlin.jvm) apply false
     alias(libs.plugins.ksp) apply false
     alias(libs.plugins.hilt) apply false
+    // Declared so the convention plugins can apply it; never applied at the root itself.
+    alias(libs.plugins.detekt) apply false
 }

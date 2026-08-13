@@ -1,0 +1,75 @@
+name: CI
+
+# Run on every push to main and on every pull request targeting it. Feature branches are
+# covered via their PR, which avoids paying for two identical runs on the same commits.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Least privilege. The default token can write to the repo; this job only reads it.
+permissions:
+  contents: read
+
+# Cancel a run when a newer commit arrives on the same branch. Without this, pushing three
+# times in a minute queues three full builds and you wait for results you no longer care
+# about. Not applied to main, where every commit's result is worth keeping.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Static analysis, tests, assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          # Must match toolchainVersion in gradle/gradle-daemon-jvm.properties. A mismatch
+          # makes Gradle download its own JDK on every run — slow, and it hides the fact
+          # that CI and local machines are building on different JVMs.
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          # 'basic' is the MIT-licensed cache provider. The default 'enhanced' provider is a
+          # proprietary component under separate terms; basic is sufficient here and keeps
+          # the repo free of third-party licence acceptance.
+          cache-provider: basic
+          # Never write cache entries from a pull request. A fork PR could otherwise poison
+          # the cache used by main.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # Each Gradle invocation is its own step so a failure is attributable at a glance in
+      # the Actions UI, rather than hiding inside one combined command.
+
+      - name: Static analysis (detekt + ktlint rules)
+        run: ./gradlew detekt --stacktrace
+
+      - name: Unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Assemble debug
+        run: ./gradlew assembleDebug --stacktrace
+
+      # Reports are only useful when something failed, and uploading them unconditionally
+      # wastes storage on every green run.
+      - name: Upload reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-reports
+          path: |
+            **/build/reports/detekt/
+            **/build/reports/tests/
+          retention-days: 7
+          if-no-files-found: ignore

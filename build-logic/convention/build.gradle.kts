@@ -27,6 +27,7 @@ dependencies {
     compileOnly(libs.android.gradlePlugin)
     compileOnly(libs.kotlin.gradlePlugin)
     compileOnly(libs.ksp.gradlePlugin)
+    compileOnly(libs.detekt.gradlePlugin)
 }
 
 gradlePlugin {
@@ -46,6 +47,10 @@ gradlePlugin {
         register("androidHilt") {
             id = "astracare.android.hilt"
             implementationClass = "AndroidHiltConventionPlugin"
+        }
+        register("detekt") {
+            id = "astracare.detekt"
+            implementationClass = "DetektConventionPlugin"
         }
         register("jvmLibrary") {
             id = "astracare.jvm.library"
