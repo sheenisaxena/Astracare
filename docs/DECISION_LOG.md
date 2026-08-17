@@ -310,6 +310,30 @@ serious misunderstanding, and stating the limit correctly demonstrates the oppos
 Depth over breadth. A second entity would add volume without demonstrating anything the first
 does not.
 
+## 3.7 CI detects; the pre-push hook and branch protection prevent
+
+A CI workflow alone does not stop a broken commit reaching `main`. It reports *after* the push
+has landed, at which point the history contains a bad commit and — on a public repository —
+the badge is publicly red. CI is a detection mechanism.
+
+Prevention needs two further layers, and they are not interchangeable:
+
+**`.githooks/pre-push` — local, fast, bypassable.** Runs `detekt` and `test` before the push
+leaves the machine, aborting on failure. Feedback in seconds rather than after a CI round
+trip. It is convenience, not a control: `git push --no-verify` skips it, and it only exists on
+machines that have run `git config core.hooksPath .githooks`. Git never version-controls
+`.git/hooks`, which is why the hook is committed to `.githooks` and wired up via config.
+
+**Branch protection — server-side, authoritative, not bypassable.** Requiring the CI check to
+pass before a merge is the only layer that actually cannot be worked around, because it is
+enforced by the remote rather than by the client.
+
+**Concept — distinguish a control from a convention.** A check that runs on the developer's
+machine improves the common case but cannot be relied upon, because the person it constrains
+is also the person who can disable it. Only a server-side rule is a control. Both are worth
+having; conflating them is how teams end up believing they have a gate when they have a
+suggestion.
+
 ## 4.5 Instrumented tests are excluded from CI
 
 Emulators in CI are slow and flaky, and a red badge caused by infrastructure is worse than no

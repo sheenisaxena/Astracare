@@ -78,6 +78,18 @@ Flow · KSP · Turbine · MockK · Gradle convention plugins
 ```bash
 ./gradlew assembleDebug
 ./gradlew test
+./gradlew detekt                 # static analysis + ktlint rules
+./gradlew detekt --auto-correct  # fix what can be fixed automatically
+```
+
+Git hooks (detekt on commit, tests on push) install themselves on the first Gradle sync — no
+setup command needed. Git never clones `.git/config`, so `core.hooksPath` cannot survive a
+clone on its own; `settings.gradle.kts` sets it during configuration instead.
+
+To verify, or to set it by hand:
+
+```bash
+git config core.hooksPath   # should print .githooks
 ```
 
 ## Current state

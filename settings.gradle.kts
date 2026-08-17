@@ -31,6 +31,24 @@ dependencyResolutionManagement {
 // IDE module entity ("Can't find module entity for Astracare.app").
 rootProject.name = "Astracare"
 
+// --- Git hooks auto-install ---------------------------------------------------------------
+// Git never clones .git/config, so `core.hooksPath` does not survive a clone: the hook files
+// arrive but git ignores them, and a fresh machine silently has no checks at all.
+//
+// This runs on every configuration (i.e. every Gradle sync), which makes the hooks
+// self-installing — nobody has to remember a setup command.
+//
+// providers.exec is used rather than a plain exec so this stays configuration-cache
+// compatible. Failures are swallowed: a missing git binary or a source download with no .git
+// directory must not break the build over a developer convenience.
+if (file(".git").exists() && file(".githooks").isDirectory) {
+    runCatching {
+        providers.exec {
+            commandLine("git", "config", "core.hooksPath", ".githooks")
+        }.result.get()
+    }
+}
+
 include(":app")
 
 // Kotlin JVM modules — no android.* on the classpath, so platform independence is

@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# pre-commit — static analysis before the commit is created.
+#
+# Runs the FAST check only. Unit tests live in the pre-push hook, because a check that runs
+# on every commit has to stay quick: anything slow here trains you to batch work into fewer,
+# larger commits, or to reach for --no-verify, and both are worse than the problem being
+# solved.
+#
+# Split rationale:
+#   pre-commit -> detekt        (seconds; keeps bad formatting out of history entirely)
+#   pre-push   -> detekt + test (once per push, however many commits that covers)
+#
+# To also run tests here, add:  ./gradlew test --quiet
+#
+# CAVEAT: this analyses the working tree, not the staged snapshot. If you stage only some of
+# your changes, detekt still sees all of them. Checking the exact staged content requires
+# stashing unstaged work mid-hook, which risks losing it if the hook is interrupted — not a
+# trade worth making for a solo repo.
+#
+# Bypass with `git commit --no-verify` when checkpointing deliberately broken work.
+
+set -e
+
+printf '\n[pre-commit] static analysis (detekt)\n'
+./gradlew detekt --quiet
+
+printf '[pre-commit] passed\n\n'

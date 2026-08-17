@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# pre-push — run the checks CI runs, before the push leaves this machine.
+#
+# Rationale: CI detects a broken commit only after it is already on the remote, where a red
+# badge is public and the history now contains a bad commit. This hook shifts that feedback
+# left by roughly five minutes and keeps `main` clean.
+#
+# This is convenience, not enforcement. It can be bypassed with `git push --no-verify` and
+# only exists on machines that have run `git config core.hooksPath .githooks`. Server-side
+# branch protection is the actual gate — see docs/DECISION_LOG.md.
+
+set -e
+
+# Skip when deleting a remote branch: there is nothing to verify.
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        exit 0
+    fi
+done
+
+# detekt already ran in pre-commit, so it is not repeated here. Tests run once per push
+# rather than per commit: they are the slower check, and batching them keeps frequent small
+# commits cheap.
+printf '\n[pre-push] unit tests\n'
+./gradlew test --quiet
+
+printf '\n[pre-push] passed — pushing\n\n'
