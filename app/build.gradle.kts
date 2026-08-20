@@ -32,6 +32,10 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:common"))
     implementation(project(":core:domain"))
+    // Required even though :app never references it directly: DataModule's @Binds for
+    // BeneficiaryRepository must be on the runtime classpath, or Hilt fails to find a
+    // binding when assembling SingletonComponent here.
+    implementation(project(":core:data"))
     implementation(project(":core:designsystem"))
     implementation(project(":feature:patients"))
 }

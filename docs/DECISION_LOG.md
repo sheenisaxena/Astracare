@@ -158,11 +158,57 @@ parameter, not a mocking framework.
 A qualifier is required because there are two bindings of the same type, `CoroutineDispatcher`;
 Dagger disambiguates by annotation.
 
-**Known debt:** this module currently lives in `:app`. It belongs in `:core:common` via the
-`hilt-core` artifact (Dagger annotations without any Android dependency) so any module can
-inject dispatchers without depending on `:app`. Tracked under Open items.
+This module lives in `:core:common`, not `:app`. A binding declared in `:app` does work at
+runtime — `SingletonComponent` is assembled there, so anything injected anywhere can reach it —
+but it inverts the dependency direction conceptually: `:core:data` would rely on a binding
+defined in a module it does not and must not depend on. Putting the contract at the bottom of
+the graph means any module extracted from this app takes its dispatcher contract with it.
 
-## 2.6 Room 2.x, not room3
+It carries Dagger annotations while remaining a pure Kotlin module: the `hilt-core` artifact
+supplies them with no Android dependency. See the `astracare.jvm.hilt` convention plugin —
+`hilt-android` here would have put `android.*` on the classpath of the very modules whose
+purpose is not having it, silently destroying the boundary in 1.4.
+
+## 2.6 Time is epoch millis behind a value class, not a date-time library
+
+`Timestamp` in `:core:model` is a `@JvmInline value class` over `Long` epoch milliseconds.
+
+**Rejected: `java.time`.** Requires core library desugaring below API 26, and `minSdk` here is
+24. Workable, but it is build configuration bought for no benefit.
+
+**Rejected: `kotlinx-datetime`.** From 0.7.0 its `Instant` and `Clock` are typealiases to
+`kotlin.time.Instant`/`Clock`, which are `@ExperimentalTime` in Kotlin 2.2. That forces
+`@OptIn` through every domain model, and Dagger's KSP processor cannot resolve a binding whose
+type sits behind that alias — the graph fails to build with `'Clock' could not be resolved`.
+
+**Applied:** epoch millis in a value class. This domain does exactly two things with time —
+**compares** two instants (conflict resolution) and **serialises** them (epoch millis is the
+wire format regardless). Time zones, calendar arithmetic and formatting are *presentation*
+concerns and belong in the UI layer, where the device locale is known; a health worker should
+see "2 hours ago" in their own language, and the domain has no business knowing that.
+
+Consequences, all favourable: `:core:model` now has **zero dependencies**, Room stores the
+column as `INTEGER` with no type converter, and `Comparable` makes conflict detection read as
+`local.updatedAt > remote.updatedAt`.
+
+### Known limitation: client wall-clock time is not trustworthy
+
+`SystemTimeProvider` reads `System.currentTimeMillis()`, which can jump — the user changes the
+device clock, or NTP corrects a drift. Any conflict resolution based on client timestamps is
+therefore **best-effort**, and two handsets can disagree about which edit came first.
+
+The production answer to this is an NTP-synced clock rather than the device clock. [Kronos]
+(https://github.com/lyft/Kronos-Android) does exactly that: it maintains an offset against NTP
+servers and exposes a corrected time, so timestamps stay comparable across devices whose
+system clocks disagree. It is what the author has used in production for the same problem.
+
+It is deliberately **not** used here — [TimeProvider] is a one-method interface precisely so
+the implementation can be swapped without touching a single call site, and adding a networked
+clock would broaden this project's scope past its stated boundary. Recording it because the
+right answer to "how do you handle clock skew?" is naming the mechanism, not discovering the
+problem in the interview.
+
+## 2.7 Room 2.x, not room3
 
 `androidx.room3:3.0.1` exists and is the Kotlin-Multiplatform-oriented major version.
 
@@ -345,7 +391,8 @@ badge. Unit tests, ktlint and detekt run on every push; instrumented tests run l
 
 | Item | Status | Resolve by |
 |---|---|---|
-| Move `DispatchersModule` to `:core:common` via `hilt-core` | Known debt (2.5) | Before cross-module DI lands |
+| ~~Move `DispatchersModule` to `:core:common`~~ | **Resolved** — moved, via the `astracare.jvm.hilt` convention plugin and `hilt-core` (2.5) | Closed |
+| Client wall-clock time is not monotonic, so timestamp conflict resolution is best-effort (2.6) | Accepted limitation; Kronos is the known remedy | Revisit if multi-device editing is added |
 | ~~detekt 1.23.8 vs Kotlin 2.2.10 compatibility~~ | **Resolved** — detekt parses Kotlin 2.2.10 without error; its embedded compiler handles the newer syntax | Closed |
 | `android.disallowKotlinSourceSets=false` required — KSP registers generated sources via `kotlin.sourceSets`, which AGP 9 rejects (3.5) | Third-party tooling gap | When KSP supports AGP 9 built-in Kotlin |
 | Conflict-resolution strategy (last-write-wins vs vector clocks) | Not yet decided | With the sync engine |

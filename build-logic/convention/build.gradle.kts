@@ -52,6 +52,10 @@ gradlePlugin {
             id = "astracare.detekt"
             implementationClass = "DetektConventionPlugin"
         }
+        register("jvmHilt") {
+            id = "astracare.jvm.hilt"
+            implementationClass = "JvmHiltConventionPlugin"
+        }
         register("jvmLibrary") {
             id = "astracare.jvm.library"
             implementationClass = "JvmLibraryConventionPlugin"

@@ -1,7 +1,7 @@
 import com.android.build.api.dsl.ApplicationExtension
 import com.astracare.buildlogic.AndroidSdk
-import com.astracare.buildlogic.libs
 import com.astracare.buildlogic.library
+import com.astracare.buildlogic.libs
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.configure
