@@ -1,6 +1,6 @@
 package com.astracare.core.data.di
 
-import com.astracare.core.data.repository.InMemoryBeneficiaryRepository
+import com.astracare.core.data.repository.OfflineFirstBeneficiaryRepository
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import dagger.Binds
 import dagger.Module
@@ -11,9 +11,12 @@ import dagger.hilt.components.SingletonComponent
  * Binds domain interfaces to their `:core:data` implementations.
  *
  * This module is the single seam between the domain layer and persistence. It is the only
- * place in the app that knows which implementation of [BeneficiaryRepository] is in use —
- * swapping the in-memory version for the Room-backed one is a one-line change here, and
- * nothing in `:core:domain`, `:feature:patients` or `:app` is touched.
+ * place in the app that knows which implementation of [BeneficiaryRepository] is in use.
+ *
+ * That claim has now been tested: replacing the temporary in-memory implementation with the
+ * Room-backed [OfflineFirstBeneficiaryRepository] changed exactly this one line. Nothing in
+ * `:core:domain`, `:feature:patients` or `:app` was touched — which is the whole return on
+ * depending on an interface rather than a class.
  *
  * ## Why `@Binds` and not `@Provides`
  *
@@ -35,7 +38,6 @@ abstract class DataModule {
 
     @Binds
     abstract fun bindsBeneficiaryRepository(
-        // Replaced by OfflineFirstBeneficiaryRepository once Room lands.
-        repository: InMemoryBeneficiaryRepository,
+        repository: OfflineFirstBeneficiaryRepository,
     ): BeneficiaryRepository
 }
