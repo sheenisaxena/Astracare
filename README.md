@@ -75,6 +75,28 @@ Flow · KSP · Turbine · MockK · Gradle convention plugins
 
 **Build requirements:** JDK 21 · Gradle 9.5 · AGP 9.3.1 · `compileSdk` 37 · `minSdk` 24
 
+`JAVA_HOME` must point at that JDK as an **OS-level environment variable**, not only inside the
+IDE. Android Studio's Gradle JDK setting (Settings → Build Tools → Gradle → Gradle JDK) is
+internal to Studio, so a build started from the IDE succeeds while the git hooks below fail with
+`JAVA_HOME is not set and no 'java' command could be found in your PATH` — hooks run `./gradlew`
+in a plain shell that never sees that setting. `org.gradle.java.home` does not cover this either:
+it selects the JDK for the Gradle daemon, but the wrapper needs a JVM before it can read it.
+
+```bash
+# macOS / Linux — in ~/.zshenv (not ~/.zshrc), so non-interactive shells inherit it too
+export JAVA_HOME="$(/usr/libexec/java_home -v 21)"   # Linux: e.g. /usr/lib/jvm/temurin-21-jdk
+
+"$JAVA_HOME/bin/java" -version                       # verify — must report 21
+```
+
+```powershell
+# Windows — user-level; restart Android Studio and any open terminals afterwards
+[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Program Files\Eclipse Adoptium\jdk-21','User')
+```
+
+Android Studio's bundled runtime (`<studio>/jbr`) works as a fallback if its `java -version`
+reports 21, but it moves on Studio updates — a standalone JDK is the more stable target.
+
 ```bash
 ./gradlew assembleDebug
 ./gradlew test
