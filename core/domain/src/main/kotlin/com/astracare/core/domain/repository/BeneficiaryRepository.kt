@@ -1,5 +1,6 @@
 package com.astracare.core.domain.repository
 
+import androidx.paging.PagingData
 import com.astracare.core.common.Outcome
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
@@ -25,11 +26,49 @@ import kotlinx.coroutines.flow.Flow
  *
  * Writes are `suspend` because they complete: there is exactly one result and nothing to
  * observe afterwards. The Flow from the read side emits the consequence.
+ *
+ * ## Why a domain interface names PagingData
+ *
+ * This is the one place the layering is genuinely arguable, so it is argued here rather than
+ * discovered later. [PagingData] comes from `androidx.paging:paging-common`, which publishes a
+ * plain JVM jar with no Android dependency — so `:core:domain` remains a Kotlin/JVM module and
+ * the compiler still rejects `import android.*` here. The rule this project actually enforces
+ * is intact.
+ *
+ * The honest cost is that the domain's contract now speaks a pagination vocabulary, and
+ * pagination is arguably a presentation concern. Two alternatives were weighed:
+ *
+ *  - **Keep Paging out of the domain entirely.** The ViewModel would then have to call
+ *    `:core:data` directly, so `:feature:patients` would depend on the data module. That
+ *    destroys the property proved on Day 9 — that swapping the implementation is a one-line
+ *    change to a single `@Binds` — and it is a much larger loss than naming a type.
+ *  - **Define an in-house pagination abstraction** for `:core:data` to adapt Paging onto.
+ *    Purest on paper, and in practice a worse reimplementation of a contract that already
+ *    exists, maintained forever to avoid writing one import.
+ *
+ * So the type is named. See DECISION_LOG 7.1.
  */
 interface BeneficiaryRepository {
 
-    /** All records, newest first. Re-emits on every local or sync-driven change. */
-    fun observeAll(): Flow<List<Beneficiary>>
+    /**
+     * Records for the history screen, paged, ordered by
+     * [com.astracare.core.domain.ordering.RecordAttentionOrder].
+     *
+     * Replaced `observeAll(): Flow<List<Beneficiary>>` on Day 12. The old signature promised
+     * to hand the whole table to the caller, which is fine at the few hundred records one
+     * health worker captures and is a design that has no answer at ten thousand.
+     */
+    fun pagedRecords(): Flow<PagingData<Beneficiary>>
+
+    /**
+     * How many records the server has not acknowledged.
+     *
+     * A separate query rather than something derived from [pagedRecords], because it cannot be
+     * derived from it: paged data is, by construction, only the rows currently loaded. Counting
+     * what is on screen would report "2 waiting to sync" on a list whose next page holds forty
+     * more — which is worse than not showing the number, because it looks authoritative.
+     */
+    fun observeAwaitingSyncCount(): Flow<Int>
 
     /** A single record, or null once it no longer exists. */
     fun observeById(id: BeneficiaryId): Flow<Beneficiary?>

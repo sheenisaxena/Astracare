@@ -776,6 +776,160 @@ outranks a range violation, because if the text is not a number the range check 
 
 ---
 
+# Part 7 — Paging, and where a sort order lives
+
+Day 12. The history list becomes a `PagingSource` over Room. The interesting part is not the
+library; it is that paging forced two decisions this project had already made in the opposite
+direction, and both had to be reopened honestly rather than quietly reversed.
+
+## 7.1 The domain layer names `PagingData`
+
+`BeneficiaryRepository` now returns `Flow<PagingData<Beneficiary>>`, so `:core:domain` depends
+on `androidx.paging:paging-common`.
+
+That looks like the layering violation this project has spent eleven days avoiding, so it is
+worth being exact about what the rule actually is. The claim is that `:core:domain` is a
+Kotlin/JVM module with no Android SDK on its classpath, enforced by the compiler rather than
+by convention. `paging-common` is a Kotlin Multiplatform library publishing JVM, Android,
+native and JS variants; a `java-library` module resolves its `standard-jvm` variant. The
+module stays Kotlin/JVM and `import android.*` still does not compile. The rule holds.
+
+What is genuinely true is that the domain's contract now speaks a pagination vocabulary, and
+pagination is arguably presentation. Two alternatives were weighed:
+
+**Keep Paging out of the domain.** The ViewModel would call `:core:data` directly, so
+`:feature:patients` would depend on the data module. That destroys the property proved on
+Day 9 — swapping the repository implementation was a one-line change to a single `@Binds`,
+with nothing in domain, UI or app touched. Trading a structural guarantee for the absence of
+one import is a bad trade.
+
+**Define an in-house pagination abstraction** in the domain for `:core:data` to adapt onto.
+Purest on paper. In practice a worse reimplementation of a contract that already exists,
+maintained forever so that a type name never appears.
+
+**Concept — know which rule you are actually enforcing.** "The domain has no Android
+dependency" is checkable and valuable. "The domain names no library type" is a different,
+much stronger rule that this project never claimed and could not keep — `kotlinx.coroutines`
+`Flow` is all over the domain already, and nobody calls that a violation.
+
+**Watch for:** the Android and JVM variants of a KMP library are different artifacts. The
+domain module compiles against `paging-common-desktop` while everything downstream resolves
+`paging-common-android`. Their APIs are generated from the same common source, so this is
+routine — but it is the kind of thing that surfaces as a puzzling `NoSuchMethodError` rather
+than a build failure, so it is written down here rather than discovered twice.
+
+## 7.2 Sort order: declared in the domain, executed in SQL
+
+Day 9's `BeneficiaryDao` carried an explicit comment saying ordering was deliberately NOT done
+in SQL, because sort order is a domain rule and splitting one decision across two layers is
+how the two halves come to disagree. `ObserveBeneficiariesUseCase` held a `sortedWith`
+comparator.
+
+Paging makes that impossible. Pages load a few dozen rows at a time, so a Kotlin comparator
+sorts the rows currently in memory and nothing else — the fifth conflicted record sits below
+the thirtieth synced one, because the two were never in the same list. The reasoning behind
+the original decision was sound; its conclusion was invalidated by a fact that was not true
+when it was made.
+
+The resolution separates two things the original comment had treated as one:
+
+- **The rule** stays in `:core:domain`, as `RecordAttentionOrder.byUrgency` — an ordered list
+  of `SyncStatus`. CONFLICTED before FAILED before PENDING before SYNCED, with the reasoning
+  attached. Reordering it is a one-line product decision, reviewable as such.
+- **The execution** moves into `BeneficiaryDao.pagedByAttention`, whose `ORDER BY CASE` binds
+  those values as query parameters. Nothing in the DAO decides that CONFLICTED beats FAILED;
+  it knows only that there are four ranks and where they come from.
+
+`ELSE 0` puts an unrecognised status ahead of everything. A status the query has not been
+taught about is one the app cannot vouch for, and the safe failure is to show it rather than
+bury it — the same reasoning as the mapper defaulting an unknown stored value to PENDING, and
+as the sync count being "not SYNCED" rather than an enumeration of the other three.
+
+**The seam this opens.** Nothing in the type system connects the Kotlin list to the four `WHEN`
+arms. They can drift, and drift is silent: no crash, just a conflicted record quietly sorting
+below synced ones on the screen that exists to surface it. `RecordAttentionOrderTest` is the
+guard — it asserts every status has a rank, none is declared twice, the count matches the
+DAO's arms, and the urgency order is what the product intends. They are the cheapest tests in
+the project and they exist precisely because the failure is invisible.
+
+**Not done: an indexed rank column.** A `CASE` expression cannot use an index, so this is a
+scan plus a sort. The production answer at scale is an `attention_rank INTEGER` column written
+at upsert time and indexed. That is a schema version and a data backfill, for a table holding
+at most a few thousand rows on one health worker's handset. Deferred to the benchmark work,
+where there will be a measurement instead of a guess — and where a backfill migration is
+useful to have written, since Part 6 noted that auto-migration cannot generate one.
+
+## 7.3 The sealed UiState dissolves rather than wrapping Paging
+
+Day 10 gave this screen `Loading | Empty | Content` and argued the three genuinely exclude one
+another. Paging answers the same question better: `LazyPagingItems.loadState` reports refresh,
+append and prepend separately, which is strictly more information than one enum can carry.
+Keeping both would mean two sources of truth about what the screen is doing, disagreeing
+during a reload.
+
+So it is deleted, not wrapped. What could not come from Paging is the count of unsynced
+records — paged data holds only the rows near the viewport, so counting it would report a
+number that changes as the user scrolls, which is worse than no number because it looks
+authoritative. That is a separate `COUNT(*)` query and a small `SyncSummaryUiState`.
+
+Day 10's decision that this screen needs no `Error` state still holds: the source is a local
+database and cannot fail a load. Paging brings an error branch and a `retry()` with it, and
+both stay unimplemented until `RemoteMediator` makes failure reachable. Building a retry
+button now would mean shipping UI nobody can reach and no test can exercise, which is how a
+codebase accumulates code that looks tested because it is never run.
+
+## 7.4 `cachedIn` is not a performance tweak
+
+`records = observeBeneficiaries().cachedIn(viewModelScope)`. Two things break without it, and
+only one is visible:
+
+- On a configuration change the `Pager` restarts from page zero, so the health worker who had
+  scrolled forty records into their day is returned to the top by rotating the phone.
+- Collecting the same `PagingData` flow more than once **throws**. A screen that renders the
+  list and also reads its load state elsewhere would crash — in whichever build someone first
+  writes that second collector, not in the one that introduced the bug.
+
+It must be the last operator applied; anything after it runs per collector and defeats it.
+
+Related, and easy to get wrong in the other direction: the `pagingSourceFactory` passed to
+`Pager` is a factory rather than a value because Room invalidates a `PagingSource` on every
+write and Paging then asks for a fresh one. Passing `dao.pagedByAttention(...)` directly hands
+it the same invalidated instance forever, and the list silently stops updating after the first
+save — with no error anywhere.
+
+## 7.5 The Pager is built in the data layer
+
+Most examples construct `Pager` in the ViewModel. `PagingConfig` is a statement about storage
+— how many rows a read fetches, how far to prefetch, whether the source can report a total —
+and a ViewModel choosing those numbers is a ViewModel making decisions about a database it is
+not supposed to know exists. The moment two screens read the same table they will choose
+differently.
+
+`enablePlaceholders = false`. Placeholders let the list report a true total and render blank
+rows for unloaded data, which keeps the scrollbar honest. They also require every row's height
+to be known before its content exists, and these rows do not have that property — a long
+village name wraps. Getting it wrong shows up as the list jumping under the user's thumb mid
+scroll, which on a screen used one-handed outdoors is worse than a scrollbar that grows.
+
+## 7.6 A fake that deliberately does not sort
+
+`FakePagedBeneficiaryRepository` returns records in insertion order, and
+`BeneficiaryListViewModelTest` asserts nothing about ordering.
+
+That is the boundary, not an omission. Ordering now lives in SQL, so any unit-level fake
+stands in for the query. A fake that sorted correctly would prove only that the fake was
+written correctly, and would go on passing while the real `ORDER BY` was wrong — a test that
+is worse than no test, because it converts an open question into false confidence.
+
+So the contract is checked where each half can actually be checked: `RecordAttentionOrderTest`
+pins the domain's declaration, and the SQL needs an instrumented test against a real database,
+which is listed as a gap rather than faked.
+
+**Concept — a fake must not be able to satisfy an assertion the real thing would fail.** When
+it can, the honest move is to move the assertion, not to improve the fake.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
@@ -791,6 +945,10 @@ outranks a range violation, because if the text is not a number the range check 
 | ~~No Compose UI yet for either MVI screen~~ | **Resolved** — both screens built, `MainActivity` no longer renders the template (Part 6) | Closed |
 | ~~Theme lives in `:app` while `:core:designsystem` is empty~~ | **Resolved** — moved, with spacing tokens and `StatusChip` (6.1, 6.2) | Closed |
 | Validation bounds are stated twice: `BeneficiaryValidator` and `strings.xml` (6.8) | Accepted — the alternative is unlocalisable sentence fragments | When the ranges next change |
-| History list is a plain `LazyColumn`, not Paging | Deliberate staging post so the app is demonstrable end to end | Day 12 |
+| ~~History list is a plain `LazyColumn`, not Paging~~ | **Resolved** — Paging 3 over Room (Part 7) | Closed |
+| The SQL `ORDER BY` has no test; only the domain half of the contract is pinned (7.2, 7.6) | Needs an instrumented test against a real database | Days 18-20 |
+| `CASE`-based ordering cannot use an index (7.2) | Correct at one health worker's scale | With the benchmark work, as an indexed rank column + backfill migration |
+| Paging's error/retry branch is unimplemented (7.3) | A local database cannot fail a load | With RemoteMediator, Days 13-14 |
+| KMP variant split: domain compiles against `paging-common-desktop`, app ships `-android` (7.1) | Expected and routine | Watch for it if a NoSuchMethodError appears |
 | No logging abstraction — `RoomDraftRepository` calls `android.util.Log` directly (6.4) | Knowing shortcut | With the sync engine, which needs real diagnostics |
 | Hand-rolled navigation (6.5) | Correct at two destinations | The first destination that takes an argument |

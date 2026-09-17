@@ -26,6 +26,9 @@ dependencies {
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    // Lets a @Query return PagingSource. Without it Room's processor rejects the return type
+    // with an error that reads like a Paging problem rather than a missing artifact.
+    implementation(libs.room.paging)
     ksp(libs.room.compiler)
 
     // androidTest, not test: MigrationTestHelper and in-memory Room need instrumentation.

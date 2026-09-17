@@ -20,4 +20,8 @@ dependencies {
     // hiltViewModel(). The artifact is named for navigation but carries no dependency on
     // Navigation Compose, which this project deliberately does not use yet.
     implementation(libs.androidx.hilt.navigation.compose)
+
+    // collectAsLazyPagingItems + itemKey. paging-common arrives transitively through
+    // :core:domain, which is where the PagingData type in the repository contract comes from.
+    implementation(libs.paging.compose)
 }

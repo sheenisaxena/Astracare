@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -28,6 +27,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.PagingData
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
 import com.astracare.core.designsystem.component.StatusChip
 import com.astracare.core.designsystem.component.StatusTone
 import com.astracare.core.designsystem.theme.AstraCareTheme
@@ -39,20 +43,15 @@ import com.astracare.core.model.Measurement
 import com.astracare.core.model.SyncStatus
 import com.astracare.core.model.Timestamp
 import com.astracare.feature.patients.util.ObserveEffects
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * Stateful entry point for the record history.
  *
- * ## Scope note
- *
- * This is a plain [LazyColumn] over the whole list, which is correct for the handful of
- * records a single health worker captures in a day and wrong at the scale the README claims
- * to care about. Day 12 replaces it with Paging 3 over Room. Written this way today so the
- * app is demonstrable end to end — capture a record, see it appear — rather than leaving the
- * list ViewModel built and unrendered for another day.
- *
- * Calling that out here rather than in a commit message: the next person to read this file
- * should know it is a deliberate staging post and not an oversight.
+ * `collectAsLazyPagingItems()` belongs here rather than in the stateless half below: it is the
+ * bridge between a `Flow<PagingData>` and something a `LazyColumn` can render, and it has to
+ * live where the ViewModel does. The screen below takes the already-collected
+ * [LazyPagingItems], which is what lets a preview hand it a static list.
  */
 @Composable
 fun BeneficiaryListRoute(
@@ -61,7 +60,8 @@ fun BeneficiaryListRoute(
     modifier: Modifier = Modifier,
     viewModel: BeneficiaryListViewModel = hiltViewModel(),
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val records = viewModel.records.collectAsLazyPagingItems()
+    val syncSummary by viewModel.syncSummary.collectAsStateWithLifecycle()
 
     ObserveEffects(viewModel.effects) { effect ->
         when (effect) {
@@ -71,7 +71,8 @@ fun BeneficiaryListRoute(
     }
 
     BeneficiaryListScreen(
-        state = uiState,
+        records = records,
+        syncSummary = syncSummary,
         onIntent = viewModel::dispatch,
         modifier = modifier,
     )
@@ -80,7 +81,8 @@ fun BeneficiaryListRoute(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun BeneficiaryListScreen(
-    state: BeneficiaryListUiState,
+    records: LazyPagingItems<Beneficiary>,
+    syncSummary: SyncSummaryUiState,
     onIntent: (BeneficiaryListIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -89,7 +91,7 @@ internal fun BeneficiaryListScreen(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.list_title)) },
-                actions = { SyncSummary(state) },
+                actions = { SyncSummaryChip(syncSummary) },
             )
         },
         floatingActionButton = {
@@ -100,21 +102,21 @@ internal fun BeneficiaryListScreen(
             )
         },
     ) { innerPadding ->
-        // Exhaustive over the sealed state. Adding a fourth case breaks compilation here,
-        // which is the entire reason the state is sealed rather than a bag of booleans.
-        when (state) {
-            BeneficiaryListUiState.Loading -> CentredMessage(
-                modifier = Modifier.padding(innerPadding),
-                content = { CircularProgressIndicator() },
-            )
+        // Three cases, read off Paging's own load state rather than a hand-maintained enum.
+        // `itemCount == 0` alone is ambiguous — it is also true before the first page has
+        // arrived — so the empty state is only shown once refresh has finished.
+        val isRefreshing = records.loadState.refresh is LoadState.Loading
+        val isEmpty = !isRefreshing && records.itemCount == 0
 
-            BeneficiaryListUiState.Empty -> CentredMessage(
-                modifier = Modifier.padding(innerPadding),
-                content = { EmptyState() },
-            )
+        when {
+            isRefreshing -> CentredBox(Modifier.padding(innerPadding)) {
+                CircularProgressIndicator()
+            }
 
-            is BeneficiaryListUiState.Content -> RecordList(
-                records = state.records,
+            isEmpty -> CentredBox(Modifier.padding(innerPadding)) { EmptyState() }
+
+            else -> RecordList(
+                records = records,
                 onIntent = onIntent,
                 contentPadding = innerPadding,
             )
@@ -125,25 +127,21 @@ internal fun BeneficiaryListScreen(
 /**
  * The count of records still on the handset, in the app bar.
  *
- * Shown on every state except Loading, including when everything is synced — a chip that
- * appears only when something is wrong trains people to ignore its absence, and "did it not
- * sync, or did the chip just not render?" is not a question a health worker should have to
- * ask at the end of a day.
+ * Shown in every state including "all synced" — a chip that appears only when something is
+ * wrong trains people to ignore its absence, and "did it not sync, or did the chip just not
+ * render?" is not a question a health worker should have to ask at the end of a day.
  */
 @Composable
-private fun SyncSummary(state: BeneficiaryListUiState) {
-    if (state !is BeneficiaryListUiState.Content) return
-
-    val allSynced = state.awaitingSync == 0
-    val text = if (allSynced) {
+private fun SyncSummaryChip(summary: SyncSummaryUiState) {
+    val text = if (summary.isEverythingSynced) {
         stringResource(R.string.list_all_synced)
     } else {
-        stringResource(R.string.list_awaiting_sync, state.awaitingSync)
+        stringResource(R.string.list_awaiting_sync, summary.awaitingSync)
     }
 
     StatusChip(
         text = text,
-        tone = if (allSynced) StatusTone.Info else StatusTone.Warning,
+        tone = if (summary.isEverythingSynced) StatusTone.Info else StatusTone.Warning,
         contentDescription = text,
         modifier = Modifier.padding(end = Spacing.Gutter),
     )
@@ -151,7 +149,7 @@ private fun SyncSummary(state: BeneficiaryListUiState) {
 
 @Composable
 private fun RecordList(
-    records: List<Beneficiary>,
+    records: LazyPagingItems<Beneficiary>,
     onIntent: (BeneficiaryListIntent) -> Unit,
     contentPadding: PaddingValues,
 ) {
@@ -164,15 +162,34 @@ private fun RecordList(
             bottom = Spacing.ScrollTail,
         ),
     ) {
-        // Keyed by record id. Without a key, LazyColumn falls back to position, so inserting
-        // a record at the top — which is exactly what capturing one does — makes Compose
-        // treat every row as changed and re-compose the whole visible list.
-        items(items = records, key = { it.id.value }) { record ->
-            RecordRow(
-                record = record,
-                onClick = { onIntent(BeneficiaryListIntent.RecordClicked(record.id)) },
-            )
-            HorizontalDivider()
+        // Keyed by record id. Without a key Paging falls back to position, so inserting a
+        // record at the top — which is exactly what capturing one does — makes Compose treat
+        // every row as changed and lose scroll position. `itemKey` is Paging's helper for
+        // exactly this and handles the placeholder case, which a hand-written lambda would
+        // have to remember to.
+        items(
+            count = records.itemCount,
+            key = records.itemKey { it.id.value },
+        ) { index ->
+            // Null only when placeholders are enabled, which they are not here. Handled
+            // rather than forced, because a `!!` in a list that Paging is free to change
+            // underneath the composition is a crash waiting for a slow disk.
+            records[index]?.let { record ->
+                RecordRow(
+                    record = record,
+                    onClick = { onIntent(BeneficiaryListIntent.RecordClicked(record.id)) },
+                )
+                HorizontalDivider()
+            }
+        }
+
+        // Appending the next page. No error branch and no retry button: this source is a local
+        // database and cannot fail a load. That UI arrives with RemoteMediator on Days 13-14,
+        // when there is a failure to retry and a way to test it.
+        if (records.loadState.append is LoadState.Loading) {
+            item {
+                CentredBox(Modifier.padding(Spacing.Gutter)) { CircularProgressIndicator() }
+            }
         }
     }
 }
@@ -232,35 +249,51 @@ private fun EmptyState() {
 }
 
 @Composable
-private fun CentredMessage(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+private fun CentredBox(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxWidth(),
     ) {
         content()
+    }
+}
+
+/**
+ * Previews feed a static `PagingData` through the same collector the real screen uses, so what
+ * renders here is the actual code path rather than a parallel one kept in sync by hand.
+ */
+@Preview(showBackground = true)
+@Composable
+internal fun BeneficiaryListContentPreview() {
+    val records = flowOf(
+        PagingData.from(
+            listOf(
+                previewRecord("1", "Asha Devi", SyncStatus.CONFLICTED),
+                previewRecord("2", "Ramesh Kumar", SyncStatus.PENDING),
+                previewRecord("3", "Sunita Bai", SyncStatus.SYNCED),
+            ),
+        ),
+    ).collectAsLazyPagingItems()
+
+    AstraCareTheme {
+        BeneficiaryListScreen(
+            records = records,
+            syncSummary = SyncSummaryUiState(awaitingSync = 2),
+            onIntent = {},
+        )
     }
 }
 
 @Preview(showBackground = true)
 @Composable
 internal fun BeneficiaryListEmptyPreview() {
-    AstraCareTheme {
-        BeneficiaryListScreen(state = BeneficiaryListUiState.Empty, onIntent = {})
-    }
-}
+    val records = flowOf(PagingData.empty<Beneficiary>()).collectAsLazyPagingItems()
 
-@Preview(showBackground = true)
-@Composable
-internal fun BeneficiaryListContentPreview() {
-    val records = listOf(
-        previewRecord("1", "Asha Devi", SyncStatus.PENDING),
-        previewRecord("2", "Ramesh Kumar", SyncStatus.SYNCED),
-        previewRecord("3", "Sunita Bai", SyncStatus.CONFLICTED),
-    )
     AstraCareTheme {
         BeneficiaryListScreen(
-            state = BeneficiaryListUiState.Content(records, awaitingSync = 2),
+            records = records,
+            syncSummary = SyncSummaryUiState.Unknown,
             onIntent = {},
         )
     }

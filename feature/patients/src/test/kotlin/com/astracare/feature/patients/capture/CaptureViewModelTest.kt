@@ -1,5 +1,6 @@
 package com.astracare.feature.patients.capture
 
+import androidx.paging.PagingData
 import app.cash.turbine.test
 import com.astracare.core.common.Outcome
 import com.astracare.core.common.time.TimeProvider
@@ -250,7 +251,11 @@ private class RecordingBeneficiaryRepository : BeneficiaryRepository {
 
     val written: List<Beneficiary> get() = records.value.values.toList()
 
-    override fun observeAll(): Flow<List<Beneficiary>> = records.map { it.values.toList() }
+    override fun pagedRecords(): Flow<PagingData<Beneficiary>> =
+        records.map { PagingData.from(it.values.toList()) }
+
+    override fun observeAwaitingSyncCount(): Flow<Int> =
+        records.map { all -> all.values.count { it.syncStatus != SyncStatus.SYNCED } }
 
     override fun observeById(id: BeneficiaryId): Flow<Beneficiary?> = records.map { it[id] }
 
