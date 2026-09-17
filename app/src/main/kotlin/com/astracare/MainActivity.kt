@@ -4,20 +4,23 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.astracare.ui.theme.AstracareTheme
+import com.astracare.core.designsystem.theme.AstraCareTheme
 import dagger.hilt.android.AndroidEntryPoint
 
 /**
- * [AndroidEntryPoint] makes this activity a member of the Hilt graph so that
- * `hiltViewModel()` can resolve ViewModels in the composables it hosts.
- * Without it, injection into any ViewModel scoped to this activity fails at runtime.
+ * The app's only activity.
+ *
+ * [AndroidEntryPoint] makes it a member of the Hilt graph, which is what lets
+ * `hiltViewModel()` resolve a `@HiltViewModel` in the composables it hosts. Without it,
+ * injection into any ViewModel scoped here fails at runtime rather than at compile time —
+ * the one place Hilt cannot check for you.
+ *
+ * Everything else lives in [AstraCareApp]. The activity's whole job is to be an entry point:
+ * a composable shell can be previewed, screenshot-tested and reasoned about, while an
+ * activity cannot.
+ *
+ * As of Day 11 this no longer renders the `Greeting("Android")` that the project template
+ * shipped with — the first thing any reviewer opening this repository would have seen.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -25,30 +28,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            AstracareTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding),
-                    )
-                }
+            AstraCareTheme {
+                AstraCareApp()
             }
         }
-    }
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier,
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    AstracareTheme {
-        Greeting("Android")
     }
 }

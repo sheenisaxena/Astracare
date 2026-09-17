@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  User-facing text for the patients feature.
+
+  In resources rather than string literals, and the reason is specific rather than habitual:
+  this app is for health workers in rural Rajasthan, so a Hindi translation is a requirement
+  the project has already committed to in ValidationError's KDoc, not a hypothetical. String
+  literals scattered through composables make that a find-and-replace across the codebase;
+  a resource file makes it a values-hi/ directory.
+
+  It also settles where validation wording lives. The domain returns ValidationError.
+  NameBlank — a fact. This file turns that into a sentence. The domain module never picks
+  words, so it never needs translating.
+-->
+<resources>
+
+    <!-- Capture screen -->
+    <string name="capture_title">New record</string>
+    <string name="capture_field_name">Name</string>
+    <string name="capture_field_age">Age (years)</string>
+    <string name="capture_field_village">Village</string>
+    <string name="capture_field_weight">Weight (kg)</string>
+    <string name="capture_field_height">Height (cm)</string>
+    <string name="capture_field_muac">MUAC (mm)</string>
+    <string name="capture_field_muac_hint">Under-fives only</string>
+    <string name="capture_action_save">Save record</string>
+    <string name="capture_action_discard">Discard</string>
+    <string name="capture_saved">Record saved to this device</string>
+    <string name="capture_save_failed">Could not save to this device. Nothing was lost — try again.</string>
+    <string name="capture_draft_restored">Restored your unfinished record</string>
+
+    <!-- Validation. Phrased as what to do, not as what is wrong: "Enter a name" beats
+         "Name must not be blank" for someone reading it on a phone in bright sun. -->
+    <string name="error_not_a_number">Enter a number</string>
+    <string name="error_name_blank">Enter a name</string>
+    <string name="error_village_blank">Enter a village</string>
+    <string name="error_age_range">Age should be between 0 and 120</string>
+    <string name="error_weight_range">Weight should be between 0.5 and 300 kg</string>
+    <string name="error_height_range">Height should be between 20 and 260 cm</string>
+    <string name="error_muac_range">MUAC should be between 50 and 500 mm</string>
+
+    <!-- History list -->
+    <string name="list_title">Records</string>
+    <string name="list_empty_title">No records yet</string>
+    <string name="list_empty_body">Records you capture are saved on this device first, then synced when there is signal.</string>
+    <string name="list_action_add">Add record</string>
+    <string name="list_awaiting_sync">%1$d waiting to sync</string>
+    <string name="list_all_synced">All synced</string>
+    <string name="list_record_summary">%1$s, age %2$d, %3$s</string>
+
+    <!-- Sync status. Short on screen, expanded for screen readers. -->
+    <string name="sync_pending">Pending</string>
+    <string name="sync_pending_description">Saved on this device, not yet sent to the server</string>
+    <string name="sync_synced">Synced</string>
+    <string name="sync_synced_description">Confirmed by the server</string>
+    <string name="sync_failed">Retrying</string>
+    <string name="sync_failed_description">Sending failed, will be retried automatically</string>
+    <string name="sync_conflicted">Needs review</string>
+    <string name="sync_conflicted_description">The server has a newer version; someone must choose which to keep</string>
+
+</resources>

@@ -35,6 +35,7 @@ class AndroidComposeConventionPlugin : Plugin<Project> {
             add("implementation", libs.library("androidx-compose-ui-tooling-preview"))
             add("implementation", libs.library("androidx-compose-material3"))
             add("implementation", libs.library("androidx-lifecycle-viewmodel-compose"))
+            add("implementation", libs.library("androidx-lifecycle-runtime-compose"))
 
             add("androidTestImplementation", libs.library("androidx-compose-ui-test-junit4"))
             add("debugImplementation", libs.library("androidx-compose-ui-tooling"))

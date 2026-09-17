@@ -5,6 +5,8 @@ import androidx.room.Room
 import com.astracare.core.data.database.AstraCareDatabase
 import com.astracare.core.data.database.DATABASE_NAME
 import com.astracare.core.data.database.dao.BeneficiaryDao
+import com.astracare.core.data.database.dao.DraftDao
+import com.astracare.core.data.database.migration.ALL_MIGRATIONS
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -34,15 +36,23 @@ object DatabaseModule {
     @Singleton
     fun providesDatabase(
         @ApplicationContext context: Context,
-    ): AstraCareDatabase = Room.databaseBuilder(
-        context = context,
-        klass = AstraCareDatabase::class.java,
-        name = DATABASE_NAME,
-    ).build()
+    ): AstraCareDatabase {
+        val builder = Room.databaseBuilder(
+            context = context,
+            klass = AstraCareDatabase::class.java,
+            name = DATABASE_NAME,
+        )
+        // Registered from a single list in the migration package, so adding a migration is
+        // one edit there rather than two. A migration that exists but is never registered is
+        // the classic way a correct migration still crashes on upgrade.
+        ALL_MIGRATIONS.forEach { builder.addMigrations(it) }
+        return builder.build()
+    }
     // Note the absence of fallbackToDestructiveMigration(). It is the usual quick fix for a
     // schema change and it works by DELETING the database. On an app whose entire purpose is
     // holding data that has not reached a server yet, that is silent, unrecoverable field data
-    // loss on upgrade. Schema changes here get a real migration.
+    // loss on upgrade. Schema changes here get a real migration — see the migration package,
+    // and DECISION_LOG 6.3.
 
     /**
      * Exposing the DAO separately means consumers depend on the narrow interface they use
@@ -53,4 +63,7 @@ object DatabaseModule {
     @Provides
     fun providesBeneficiaryDao(database: AstraCareDatabase): BeneficiaryDao =
         database.beneficiaryDao()
+
+    @Provides
+    fun providesDraftDao(database: AstraCareDatabase): DraftDao = database.draftDao()
 }

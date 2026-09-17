@@ -1,7 +1,9 @@
 package com.astracare.core.data.di
 
 import com.astracare.core.data.repository.OfflineFirstBeneficiaryRepository
+import com.astracare.core.data.repository.RoomDraftRepository
 import com.astracare.core.domain.repository.BeneficiaryRepository
+import com.astracare.core.domain.repository.DraftRepository
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -40,4 +42,14 @@ abstract class DataModule {
     abstract fun bindsBeneficiaryRepository(
         repository: OfflineFirstBeneficiaryRepository,
     ): BeneficiaryRepository
+
+    /**
+     * Drafts get their own binding rather than being folded into the repository above.
+     *
+     * They look similar enough to merge and must not be: records are pushed to a server,
+     * drafts must never be. One repository would mean one `observeAll()` that has to remember
+     * to exclude drafts, and the first time anyone forgot, a half-typed record would sync.
+     */
+    @Binds
+    abstract fun bindsDraftRepository(repository: RoomDraftRepository): DraftRepository
 }

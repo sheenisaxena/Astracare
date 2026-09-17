@@ -387,6 +387,395 @@ badge. Unit tests, ktlint and detekt run on every push; instrumented tests run l
 
 ---
 
+# Part 5 — UI state management (MVI)
+
+Day 10. `:feature:patients` gains a state machine per screen: a sealed or data-class
+`UiState`, an `Intent` type, a pure reducer, and a `Channel` for one-shot effects. Both
+ViewModels were rewritten; neither exposes a raw domain list any more.
+
+## 5.1 Marker interfaces, not an `MviViewModel<S, I, E>` base class
+
+A generic base class holding the `MutableStateFlow` and the effect `Channel` is the obvious
+move, and it was rejected. It saves roughly eight lines per screen. It costs the ability for
+any screen to differ — and the two screens in this module already differ in a way that
+matters.
+
+`CaptureViewModel` owns its state: the form is created empty and mutated by a reducer, so a
+`MutableStateFlow` is correct. `BeneficiaryListViewModel` does not own its state: the list
+arrives from Room through a `Flow` it cannot write to, so its state is built with `map` and
+`stateIn` and there is no mutable holder at all. A base class with a `MutableStateFlow` field
+would force the list screen to copy every upstream emission into a field it then has to keep
+consistent with the database — a second copy of the truth, created to satisfy an abstraction
+whose purpose was to save typing.
+
+What the abstraction was actually wanted for is naming, and three marker interfaces
+(`UiState`, `UiIntent`, `UiEffect`) provide that while constraining nothing.
+
+**Concept — the cost of an abstraction is paid by its least typical user.** Shared code that
+suits four of five cases is not 80% useful; the fifth case either distorts itself to fit or
+special-cases around it, and both are worse than the duplication avoided. Deduplication is
+cheap to add later and expensive to remove once depended upon.
+
+*Rejected:* base class in a new `:core:ui` module (a module for three empty interfaces and
+one consumer); base class inside `:feature:patients` (right abstraction, wrong home the
+moment a second feature exists). The markers live in `:feature:patients/mvi` and move to
+`:core:ui` when there is a second consumer — an IDE package move, not a redesign.
+
+## 5.2 The shape of `UiState` follows the screen
+
+The history list uses a sealed interface; the capture form uses a data class. This is not an
+inconsistency, and the reason is worth stating because "always use a sealed UiState" is
+commonly repeated advice that is wrong half the time.
+
+**Sealed, for the list.** `Loading`, `Empty` and `Content` genuinely exclude one another. As
+a data class it would be `isLoading: Boolean` plus `records: List<Beneficiary>`, which admits
+`isLoading = true` with forty records loaded, and cannot distinguish an empty database from
+one that has not answered yet. That second ambiguity is the concrete bug: a composable given
+`emptyList()` has to guess, and whichever way it guesses is wrong half the time — either
+"no records yet" flashes for a frame before data arrives, or a spinner never stops for a
+health worker who genuinely has no records. The information was never in the type.
+
+**Data class, for the form.** Nothing about a form is mutually exclusive. Every field is
+always present and always editable, even mid-save. A sealed hierarchy would have one subtype,
+or one per field permutation.
+
+*Not modelled:* an `Error` state on the list. Reads come from Room, which is local and is the
+single source of truth — there is no network call behind that `Flow` that could fail. A state
+nobody can reach is UI nobody can see and a test nobody can write. Paging brings its own
+`LoadState` on Day 12, with the error case it actually needs.
+
+## 5.3 Effects go through a `Channel`, not a `SharedFlow` and not state
+
+Three candidates, one requirement: "navigate back after saving" must happen exactly once, and
+must not happen again because the device was rotated.
+
+**In state (`navigateBack: Boolean`) — rejected.** State is replayed on every recomposition
+and every configuration change, so the flag fires again on rotation. The usual patch is a
+`consumed` flag, which then needs resetting, which needs knowing when the UI has finished
+with it. The bug is not that this is hard; it is that it is state modelling an event.
+
+**`MutableSharedFlow(replay = 0)` — rejected.** It drops emissions made while nothing is
+collecting, and there is a real window here: the save completes while the composable is
+mid-recomposition or the app is briefly backgrounded, and `Saved` is discarded, leaving the
+health worker on a form whose record has already been written with no indication either way.
+`replay = 1` does not fix it, it inverts it — the event is re-delivered to the next collector,
+so returning to the screen navigates away again.
+
+**`Channel(BUFFERED)` — chosen.** Holds the event until someone collects it, delivers it to
+exactly one collector, then it is gone. Exposed with `receiveAsFlow()`, not
+`consumeAsFlow()`: the latter cancels the channel when its first collector is cancelled,
+which happens on every configuration change, so the second collector would receive nothing
+for the rest of the ViewModel's life.
+
+`send` inside a coroutine rather than `trySend`, whose failure is a return value nobody
+checks. A silently dropped navigation event is a screen that never closes.
+
+**The test for state versus effect:** would replaying it be wrong? If yes, it is an effect.
+This is why a rejected form is *not* an effect — validation errors must still be on the
+fields after a rotation, so they are state.
+
+## 5.4 The reducer is a pure function, outside the ViewModel
+
+`CaptureReducer.kt` holds every transition of `CaptureUiState` as a top-level pure function.
+`CaptureViewModel` decides *when* a transition happens and what asynchronous work surrounds
+it; it never computes a next state itself.
+
+The payoff is specific. State bugs in a form are combinational — the report is "the save
+button stayed disabled", and the cause is some pairing of a keystroke, a failed write and a
+rotation. Reproducing that through a UI means recreating the sequence by hand. Against a pure
+function it is three lines, with no dispatcher, no Robolectric and no ViewModel, which is why
+`CaptureReducerTest` runs in 27ms and cannot flake.
+
+The list screen's equivalent is a projection, `List<Beneficiary> -> UiState`, rather than a
+fold — there is no previous state to build on, because Room pushes the complete ordered list
+on every change. The intents on that screen change no state at all; both are navigation, so
+both produce only effects. Inventing a state change for them to justify the word "reducer"
+would be architecture as costume.
+
+## 5.5 Two reducer entry points, so the UI cannot claim a save succeeded
+
+The textbook formulation is one sealed `Intent` hierarchy and one reducer. That hierarchy
+must include the asynchronous results (`SaveSucceeded`, `SaveFailed`) so that every state
+change goes through one function — and once it does, `dispatch(SaveSucceeded)` is a call a
+composable can legally write.
+
+Instead there are two pure functions: `reduce(CaptureIntent)` for what the user did, and
+`reduce(SaveOutcome)` for what the save reported. `SaveOutcome` is `internal`, so the UI can
+ask for a save but cannot announce one. Every transition still lives in one file; the
+property that was wanted is kept, and the hole is closed by the type system rather than by a
+comment asking people not to.
+
+## 5.6 Parse errors belong to the UI; range errors belong to the domain
+
+`CaptureErrors` carries two collections, and the split is a layering decision, not a
+convenience.
+
+Every numeric field on the form is a `String`, because a text box holds text: while someone
+types a weight they pass through `"1"`, `"12"`, `"12."` and `"12.5"`, and only two of those
+are a `Double`. State typed as `Double` has to decide what `"12."` means, and every available
+answer breaks the keyboard.
+
+So "is this text a number?" is a question only the UI layer can ask — `Beneficiary.ageYears`
+is an `Int`, so `"abc"` cannot reach the validator. That check lives in
+`CaptureUiState.toBeneficiary()`. "Is 400 a plausible age?" is a domain rule that must also
+hold for records arriving from a sync pull or an import, so it stays in
+`BeneficiaryValidator`, reached through `SaveBeneficiaryUseCase`, and is **not** duplicated
+in the form.
+
+`CaptureFormMappingTest` pins this boundary with a test asserting that `"400"` maps
+*successfully* to a record. That test exists so a future well-meaning "let's validate earlier"
+change fails in CI rather than in production, six months later, when the UI's bound and the
+domain's bound have quietly diverged.
+
+## 5.7 A successful save clears the form; a failed one does not
+
+`SaveOutcome.Succeeded` resets to a blank `CaptureUiState`. Field work is record after
+record, and leaving the previous beneficiary's details on screen is how the next child gets
+the last child's village — a data-integrity bug wearing a convenience feature's clothes.
+
+`SaveOutcome.Failed` preserves every keystroke. A storage failure is transient and not the
+health worker's fault; clearing the form would make them re-enter a visit they already
+recorded, on a handset that has just demonstrated it cannot be trusted to hold data.
+
+Re-entrancy is handled in the reducer rather than the ViewModel — `SaveClicked` while
+`isSaving` returns the same state — so "a save in flight absorbs further taps" is a property
+of the state machine, provable without one. The ViewModel reads the value `getAndUpdate`
+returns to decide whether to start work, because asking the *new* state would see
+`isSaving` already true and never launch anything.
+
+## 5.8 `SaveBeneficiaryUseCase` is injected into the capture screen, not the list
+
+It was removed from `BeneficiaryListViewModel` on Day 8 when detekt flagged it as injected
+but unused. That was correct and the fix was not to suppress the warning: a list screen does
+not save. Keeping it would have meant holding a dependency whose only justification was that
+it would be needed eventually, on the wrong class. It is injected here, where it is used.
+
+---
+
+# Part 6 — UI, the design system, and durable drafts
+
+Day 11. The app stops rendering `Greeting("Android")` and starts being an app: two Compose
+screens over the Day 10 state machines, a design system that finally contains the theme the
+README always said it did, and autosave that survives the handset dying.
+
+## 6.1 The theme moved to `:core:designsystem`, and what it grew on the way
+
+Since Day 1 the README listed `:core:designsystem` as owning the Compose theme while the
+theme sat in `:app` and the module was empty. That is a documented-but-false claim a reviewer
+can check in about ten seconds, and it is a worse signal than an admitted gap.
+
+Moving it was not a file move. Three things changed:
+
+**Dynamic colour was removed, not carried over.** Material You derives a palette from the
+user's wallpaper. That is a good default for a consumer app and the wrong one here, because
+this app uses colour to carry clinical meaning — whether a record has reached the server —
+and that signal must be legible on a low-end panel in direct sunlight. A palette generated
+from an arbitrary photograph cannot be contrast-checked at build time, by a reviewer, or at
+all. It is also Android 12+ only against a minSdk of 24, so supporting it would mean
+validating two palettes for a purely aesthetic gain.
+
+**Status colours were kept out of the Material scheme.** `colorScheme.error` is a *theming*
+slot: it means "this looks like an error in this palette". A `StatusTone` means "this record
+has not reached the server". Mapping one onto the other couples a clinical signal to a
+styling decision, and they drift the first time anyone adjusts the brand colours. They travel
+in a separate `CompositionLocal` instead — `staticCompositionLocalOf`, because the value
+changes only when the whole theme does.
+
+**The palette is teal rather than the template's purple.** A purple primary sits too close to
+the amber-to-red attention range once a cheap screen washes out in daylight, which would make
+the one distinction the list screen exists to communicate the hardest one to see.
+
+**Concept — a false claim in documentation costs more than a missing feature.** An empty
+module is a gap. An empty module the README describes as full is a reason to distrust the
+rest of the README.
+
+## 6.2 Spacing tokens, and making a lint rule work for the architecture
+
+Every gap and inset comes from `Spacing`/`Sizing` in the design system. Beyond the usual
+argument — a UI assembled from `16.dp`, `12.dp` and `18.dp` written on different afternoons
+does not look designed, and the drift is invisible in review because each number looks
+reasonable — there is a second effect worth naming.
+
+detekt's `MagicNumber` rule is active project-wide and excludes only the design-system and
+theme directories. So a literal `16.dp` in a feature module is a **build failure**. The
+lint configuration and the design system therefore point the same way: the cheapest path
+through CI is the one that uses a token.
+
+**Concept — prefer a rule that makes the right thing easiest over a rule you suppress.** The
+alternative was adding feature paths to `MagicNumber`'s excludes, which would have removed
+the rule's value everywhere to solve a problem the design system was going to solve anyway. A
+lint rule that fights the architecture should change the architecture or be deleted; leaving
+it in place with a growing exclusion list gets the costs of both.
+
+Tokens are named by role, not size. `Gutter` survives a decision to make it 20.dp;
+`Space16` does not.
+
+## 6.3 Drafts live in Room, not DataStore
+
+"Offline autosave of in-progress form state" needed a store. Three candidates:
+
+**`SavedStateHandle` — rejected.** Survives rotation and system-initiated process death. Does
+not survive the user swiping the app away, a crash, or the battery going flat. For a health
+worker on a cheap handset at the end of a long day, the battery is the case that matters, so
+this does not actually deliver the feature.
+
+**DataStore — rejected, and it was the planned choice.** The Reconciliation sheet had penned
+it in as "a ~30-minute integration folded into whichever day needs session state". It offers
+the same durability as Room. It costs a second persistence mechanism for one object: a second
+thing to migrate, a second thing to encrypt when the security work lands on Day 16, a second
+place to look when data goes missing. Choosing it would have bought a named technology for
+the resume at the cost of a worse system — which is the trade this project's plan explicitly
+warns against making.
+
+**Room — chosen.** The database, its migration story and its backup policy already exist.
+
+A single-row table with a fixed primary key, so "there is one draft" is enforced by SQLite
+rather than by discipline. Every measurement column is `TEXT` while the same measurement in
+`beneficiaries` is `REAL`, and that disagreement is correct: a record's weight is a number, a
+draft's weight is whatever has been typed so far, and `"12."` is not a number. Coercing at the
+storage layer would mean the draft that comes back is not the draft that was saved.
+
+### The migration is hand-written, and the overload matters
+
+Adding a table bumps the schema to 2, and there is no `fallbackToDestructiveMigration` to
+absorb that — deliberately, since it resolves schema changes by deleting a database holding
+unsynced field data.
+
+`@AutoMigration` would have generated this one correctly; adding a table is the case it
+handles best. It is written out anyway, because the *next* migration will rename or backfill a
+column and auto-migration cannot infer that. One mechanism established early beats two.
+
+The trap worth recording: Room 2.7 added `migrate(connection: SQLiteConnection)` alongside
+`migrate(db: SupportSQLiteDatabase)`, both are open, and **both throw `NotImplementedError` by
+default**. Overriding the wrong one compiles, looks complete, and crashes on the first real
+upgrade. Which one runs depends on how the database was built: `Room.databaseBuilder` with no
+`setDriver` uses the framework driver, and the connection overload unwraps it and delegates.
+So `SupportSQLiteDatabase` is correct here — and would silently become wrong if this project
+adopted a `SQLiteDriver`, for example when moving to `androidx.room3`.
+
+### One rule, in a use case
+
+`SaveDraftUseCase` deletes rather than stores a blank draft. Without it, clearing the form
+leaves six empty strings on disk, the next launch dutifully restores them, and the capture
+screen can never start genuinely fresh. The same path runs after a successful save, so the
+rule also stops a committed record leaving a ghost that looks like unfinished work. Clearing
+is therefore `invoke(CaptureDraft.Empty)` — one code path, reading as what it is.
+
+## 6.4 Autosave is debounced, ordered, and allowed to fail quietly
+
+Three decisions inside roughly fifteen lines, each of which is a bug if taken the other way.
+
+**Debounced at 400ms, keyed on the draft rather than the state.** A write per keystroke is a
+database transaction per keystroke, on a low-end handset, while someone types into it.
+`distinctUntilChanged` runs on the mapped `CaptureDraft`, not on `CaptureUiState`, because
+focus changes, save attempts and error clearing all produce a new state without changing a
+character of typed text — comparing states would restart the timer for none of the reasons
+that matter.
+
+**Restore strictly before autosave, in one coroutine.** If the collector started first it
+would observe the blank initial state, write it, and the restore would then be recovering a
+draft it had already destroyed. Sequencing them in a single `launch` makes that impossible
+rather than unlikely, because `collect` never returns.
+
+**The draft is cleared explicitly on a successful save, not left to the debounce.** Otherwise
+the draft outlives the record it produced for 400ms, and a process death inside that window
+restores a form for a visit that is already saved — inviting the same child to be entered
+twice.
+
+**Failures are swallowed with a log, and only here.** `OfflineFirstBeneficiaryRepository`
+returns an `Outcome` because a failed record write must reach the health worker. A failed
+autosave must not: it retries on the next keystroke, and interrupting someone mid-form to
+report it is worse than the failure. detekt's `SwallowedException` rule is active precisely
+because silent catches in persistence code are how data loss becomes invisible — so the
+exception is logged, not discarded, and this is the one place the exemption is taken.
+
+## 6.5 No Navigation Compose for two destinations
+
+Decided during planning; the consequence lives in `AstraCareApp`. What `androidx.navigation`
+buys is a typed graph, argument marshalling, deep links, and a back stack that survives
+process death. This app has no arguments, no deep links, and a back stack one entry deep.
+
+What it costs is not the dependency but the shape: routes become strings or serializable
+types, every screen acquires a `NavController`, and previewing a screen means faking one.
+Worth paying at eight destinations; ceremony at two, and ceremony adopted early is ceremony
+nobody revisits.
+
+The hand-rolled version still does the two things a `NavHost` would have done: a `BackHandler`
+enabled only where there is somewhere to go back to, and `rememberSaveable` with a hand-written
+`Saver`, so the current destination survives process death. Without the latter, a phone that
+reclaimed the app mid-form would return the health worker to the list — their draft intact,
+which is what 6.3 is for, but with no indication of where it went.
+
+**The line to watch:** the first destination that takes an argument — the record detail
+screen, probably Day 12 — is the point where this starts reimplementing argument passing and
+the library wins. `hiltViewModel()` is already in use, from `androidx.hilt:hilt-navigation-compose`,
+which despite its name carries no dependency on Navigation Compose.
+
+## 6.6 Route and Screen are separate composables
+
+Every screen is two functions: `CaptureRoute` owns the ViewModel and turns effects into
+navigation, `CaptureScreen` is a pure function of its arguments.
+
+The split is what makes the second half previewable in the IDE, screenshot-testable, and
+drivable from a Compose UI test with no Hilt graph and no database. Combined into one
+composable, every preview would need dependency injection — which in practice means no
+previews, which in practice means the UI is only ever seen by running the app.
+
+Effects are collected through a shared `ObserveEffects` helper rather than inline, because
+both screens need it and both would get it subtly wrong. `LaunchedEffect(Unit) { collect }` —
+the version everyone writes first — keeps its coroutine alive while the screen sits in the
+back stack, so a screen the user cannot see goes on receiving navigation events and acting on
+them. `repeatOnLifecycle(STARTED)` cancels collection when the screen stops; the `Channel`
+from Day 10 buffers the event meanwhile, so pausing defers delivery rather than dropping it.
+The two choices only work together — `repeatOnLifecycle` over a `SharedFlow(replay = 0)` would
+genuinely lose the event.
+
+`rememberUpdatedState` keeps the long-lived collector pointed at the current lambda without
+restarting it, which would re-subscribe to the channel.
+
+## 6.7 The design system does not know what a beneficiary is
+
+`StatusChip` takes a `String` and a `StatusTone`, not a `SyncStatus`. `:core:designsystem` has
+no dependency on `:core:model`, and this is the decision that keeps it that way.
+
+The obvious component takes a `SyncStatus` and decides internally how to colour and word it.
+That would put three decisions in the wrong module: that CONFLICTED is critical while FAILED
+is only a warning (a product judgement about this app); that FAILED reads "Retrying" rather
+than "Failed" (telling a health worker something failed when the app has not given up invites
+them back to paper); and what any of it is called in the user's language.
+
+So `SyncStatusPresentation` in the feature module maps status to text-and-tone, and the design
+system renders what it is handed — usable by a second feature that has nothing to do with
+sync.
+
+The chip also takes a required `contentDescription` separate from its visible text, because
+the two should differ: "3 pending" on screen, "3 records waiting to sync" to a screen reader.
+Required rather than optional makes the accessible wording a decision at every call site
+instead of an omission at most of them.
+
+## 6.8 Validation wording is a string resource, and the bounds are not duplicated
+
+`ValidationError.WeightOutOfRange` carries the offending value and no opinion about language.
+`CaptureErrorText` turns it into "Weight should be between 0.5 and 300 kg", from
+`res/values/strings.xml`. Neither could do the other's job: the domain cannot know the locale,
+and the composable cannot know the clinical bounds.
+
+This is the other half of 5.6, and it is why the domain module needs no translation at all.
+For an app whose users read Hindi, that is a requirement the project has already committed to
+in `ValidationError`'s own KDoc, not a hypothetical.
+
+One honest gap: the numbers inside those messages restate `BeneficiaryValidator`'s bounds. The
+alternative — interpolating them out of the error type — produces "between 0.5 and 300.0 kg"
+and an English sentence assembled from fragments no translator can reorder. Listed as an open
+item rather than pretended away.
+
+Only the first error per field is shown. A field with two problems has one worth reporting
+first, and stacking messages under an input pushes the rest of the form off a small screen —
+which is how someone ends up unable to see the field they are fixing. A malformed value
+outranks a range violation, because if the text is not a number the range check never ran.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
@@ -398,3 +787,10 @@ badge. Unit tests, ktlint and detekt run on every push; instrumented tests run l
 | Conflict-resolution strategy (last-write-wins vs vector clocks) | Not yet decided | With the sync engine |
 | SQLCipher vs Jetpack Security for field-level encryption | Not yet decided | With PII encryption |
 | Cold-start numbers before/after Baseline Profile | Not yet measured | With the benchmark module |
+| MVI marker interfaces live in `:feature:patients/mvi` (5.1) | Deliberate — one consumer | Move to `:core:ui` at the second feature module |
+| ~~No Compose UI yet for either MVI screen~~ | **Resolved** — both screens built, `MainActivity` no longer renders the template (Part 6) | Closed |
+| ~~Theme lives in `:app` while `:core:designsystem` is empty~~ | **Resolved** — moved, with spacing tokens and `StatusChip` (6.1, 6.2) | Closed |
+| Validation bounds are stated twice: `BeneficiaryValidator` and `strings.xml` (6.8) | Accepted — the alternative is unlocalisable sentence fragments | When the ranges next change |
+| History list is a plain `LazyColumn`, not Paging | Deliberate staging post so the app is demonstrable end to end | Day 12 |
+| No logging abstraction — `RoomDraftRepository` calls `android.util.Log` directly (6.4) | Knowing shortcut | With the sync engine, which needs real diagnostics |
+| Hand-rolled navigation (6.5) | Correct at two destinations | The first destination that takes an argument |
