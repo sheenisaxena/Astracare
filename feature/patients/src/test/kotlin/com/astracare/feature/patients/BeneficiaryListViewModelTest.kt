@@ -193,5 +193,24 @@ private class FakePagedBeneficiaryRepository : BeneficiaryRepository {
     }
 
     override suspend fun pendingSync(): List<Beneficiary> =
-        records.value.filter { it.syncStatus != SyncStatus.SYNCED }
+        records.value.filter {
+            it.syncStatus == SyncStatus.PENDING || it.syncStatus == SyncStatus.FAILED
+        }
+
+    override suspend fun updateSyncStatus(
+        id: BeneficiaryId,
+        unchangedSince: Timestamp,
+        status: SyncStatus,
+    ): Boolean {
+        // Mirrors the real conditional UPDATE. A fake that marked unconditionally would let
+        // the stale-write bug pass a test somewhere else in the suite.
+        val unchanged = records.value
+            .firstOrNull { it.id == id && it.updatedAt == unchangedSince }
+        if (unchanged != null) {
+            records.value = records.value.map {
+                if (it.id == id) it.copy(syncStatus = status) else it
+            }
+        }
+        return unchanged != null
+    }
 }

@@ -55,6 +55,8 @@
     <string name="sync_synced_description">Confirmed by the server</string>
     <string name="sync_failed">Retrying</string>
     <string name="sync_failed_description">Sending failed, will be retried automatically</string>
+    <string name="sync_rejected">Not accepted</string>
+    <string name="sync_rejected_description">The server would not accept this record; it needs correcting</string>
     <string name="sync_conflicted">Needs review</string>
     <string name="sync_conflicted_description">The server has a newer version; someone must choose which to keep</string>
 

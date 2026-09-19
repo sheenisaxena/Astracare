@@ -44,10 +44,14 @@ interface BeneficiaryDao {
      * What actually changed is where the rule is *executed*, not where it is *decided*. The
      * priority is still declared in `:core:domain` by `RecordAttentionOrder`, and its values
      * arrive here as bound parameters. Nothing in this file decides that CONFLICTED beats
-     * FAILED; it only knows there are four ranks and where to read them from.
+     * FAILED; it only knows how many ranks there are and where to read them from.
      *
      * The parameters are enum *names*, matching how `sync_status` is stored — see
      * [BeneficiaryEntity.syncStatus] for why the name and not the ordinal.
+     *
+     * Five arms as of Day 13, when `SyncStatus.REJECTED` was added. `RecordAttentionOrderTest`
+     * is what caught that this file needed widening — nothing in the type system connects a
+     * Kotlin enum to a SQL `CASE`.
      *
      * `ELSE 0` puts anything unrecognised ahead of everything else. A status this query has
      * not been taught about is one the app cannot vouch for, and the safe failure is to show it
@@ -68,6 +72,7 @@ interface BeneficiaryDao {
                 WHEN :rank2 THEN 2
                 WHEN :rank3 THEN 3
                 WHEN :rank4 THEN 4
+                WHEN :rank5 THEN 5
                 ELSE 0
             END,
             recorded_at DESC
@@ -78,6 +83,7 @@ interface BeneficiaryDao {
         rank2: String,
         rank3: String,
         rank4: String,
+        rank5: String,
     ): PagingSource<Int, BeneficiaryEntity>
 
     /**
@@ -105,13 +111,42 @@ interface BeneficiaryDao {
     suspend fun upsert(entity: BeneficiaryEntity)
 
     /**
-     * Records the sync engine still needs to push.
+     * Records the sync engine should try to send.
      *
-     * The status is passed in rather than written into the SQL string so the comparison
-     * cannot drift from the enum definition.
+     * Takes the retryable statuses as a list rather than excluding SYNCED, which is what it
+     * used to do. "Everything that is not synced" also matches REJECTED and CONFLICTED —
+     * records the server has already refused or that need a person — so the old query had the
+     * handset re-offering them on every single pass, forever.
+     *
+     * The values are bound rather than written into the SQL so they cannot drift from the
+     * enum.
      */
-    @Query("SELECT * FROM beneficiaries WHERE sync_status != :syncedStatus")
-    suspend fun pendingSync(syncedStatus: String): List<BeneficiaryEntity>
+    @Query("SELECT * FROM beneficiaries WHERE sync_status IN (:retryableStatuses)")
+    suspend fun pendingSync(retryableStatuses: List<String>): List<BeneficiaryEntity>
+
+    /**
+     * Applies a sync outcome, but only to a row that has not been edited since it was read.
+     *
+     * The `AND updated_at = :unchangedSince` clause is the whole point. Between the push
+     * reading a record and this write landing, the health worker can have edited it — and
+     * marking the row SYNCED then would claim the new version reached the server when only
+     * the old one did. The edit would be lost with nothing looking wrong anywhere.
+     *
+     * Returns the number of rows changed: 1 if the mark applied, 0 if the record moved. Zero
+     * is a normal outcome, not an error.
+     */
+    @Query(
+        """
+        UPDATE beneficiaries
+        SET sync_status = :status
+        WHERE id = :id AND updated_at = :unchangedSince
+        """,
+    )
+    suspend fun updateSyncStatusIfUnchanged(
+        id: String,
+        unchangedSince: Long,
+        status: String,
+    ): Int
 
     @Query("DELETE FROM beneficiaries")
     suspend fun deleteAll()

@@ -7,6 +7,7 @@ import com.astracare.core.domain.repository.RepositoryError
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
 import com.astracare.core.model.SyncStatus
+import com.astracare.core.model.Timestamp
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -69,6 +70,20 @@ class FakeBeneficiaryRepository @Inject constructor() : BeneficiaryRepository {
         }
         records.update { it + (beneficiary.id to beneficiary) }
         return Outcome.success()
+    }
+
+    override suspend fun updateSyncStatus(
+        id: BeneficiaryId,
+        unchangedSince: Timestamp,
+        status: SyncStatus,
+    ): Boolean {
+        // Mirrors the real conditional UPDATE: refuse the mark if the record moved. A fake
+        // that applied it unconditionally would let the stale-write bug pass a test.
+        val unchanged = records.value[id]?.takeIf { it.updatedAt == unchangedSince }
+        if (unchanged != null) {
+            records.update { it + (id to unchanged.copy(syncStatus = status)) }
+        }
+        return unchanged != null
     }
 
     override suspend fun pendingSync(): List<Beneficiary> =

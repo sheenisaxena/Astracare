@@ -1,7 +1,9 @@
 package com.astracare.core.data.di
 
+import com.astracare.core.data.remote.MockRemoteBeneficiarySource
 import com.astracare.core.data.repository.OfflineFirstBeneficiaryRepository
 import com.astracare.core.data.repository.RoomDraftRepository
+import com.astracare.core.domain.remote.RemoteBeneficiarySource
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.DraftRepository
 import dagger.Binds
@@ -52,4 +54,14 @@ abstract class DataModule {
      */
     @Binds
     abstract fun bindsDraftRepository(repository: RoomDraftRepository): DraftRepository
+
+    /**
+     * The mock server. Bound here rather than in `:core:sync` because it is a data source,
+     * and because swapping it for a real one should be this one line — the same property the
+     * repository binding above already demonstrates.
+     */
+    @Binds
+    abstract fun bindsRemoteBeneficiarySource(
+        source: MockRemoteBeneficiarySource,
+    ): RemoteBeneficiarySource
 }

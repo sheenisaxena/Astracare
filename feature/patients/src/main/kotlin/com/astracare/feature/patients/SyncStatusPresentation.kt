@@ -28,7 +28,8 @@ internal data class SyncStatusPresentation(
 )
 
 /**
- * Exhaustive `when`, so adding a [SyncStatus] fails the build here.
+ * Exhaustive `when`, so adding a [SyncStatus] fails the build here — which is how Day 13's
+ * REJECTED was caught, at compile time rather than by a chip rendering blank.
  *
  * The alternative — a `when` with an `else` branch — would let a new status render silently as
  * whatever the fallback was, which on this screen means telling someone their record is fine
@@ -54,6 +55,15 @@ internal fun SyncStatus.presentation(): SyncStatusPresentation = when (this) {
         labelRes = R.string.sync_failed,
         descriptionRes = R.string.sync_failed_description,
         tone = StatusTone.Warning,
+    )
+
+    SyncStatus.REJECTED -> SyncStatusPresentation(
+        labelRes = R.string.sync_rejected,
+        descriptionRes = R.string.sync_rejected_description,
+        // Critical, like CONFLICTED: both need a person, and neither will improve on its own.
+        // "Not accepted" rather than "Rejected" — the record is not the health worker's
+        // mistake to be blamed for, it is a thing that now needs fixing.
+        tone = StatusTone.Critical,
     )
 
     SyncStatus.CONFLICTED -> SyncStatusPresentation(

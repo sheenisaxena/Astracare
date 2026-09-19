@@ -4,6 +4,8 @@ import androidx.paging.PagingData
 import com.astracare.core.common.Outcome
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
+import com.astracare.core.model.SyncStatus
+import com.astracare.core.model.Timestamp
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -82,8 +84,40 @@ interface BeneficiaryRepository {
      */
     suspend fun upsert(beneficiary: Beneficiary): Outcome<Unit, RepositoryError>
 
-    /** Records the sync engine still needs to push. */
+    /**
+     * Records the sync engine should try to send.
+     *
+     * Narrowed on Day 13 from "anything not SYNCED" to "anything retryable" — PENDING and
+     * FAILED. A [SyncStatus.REJECTED] record has been refused and would be refused again; a
+     * [SyncStatus.CONFLICTED] one needs a person to choose a version. Re-offering either on
+     * every pass is a handset retrying forever on a battery that has to last a working day.
+     *
+     * They still count toward [observeAwaitingSyncCount], because they are still not on the
+     * server and the health worker needs to know that.
+     */
     suspend fun pendingSync(): List<Beneficiary>
+
+    /**
+     * Records the outcome of a push, but only if the record has not changed since.
+     *
+     * [unchangedSince] is the [Beneficiary.updatedAt] the caller read before pushing. The
+     * write applies only if the stored row still carries that timestamp, and the return value
+     * says whether it did.
+     *
+     * This exists because of one specific, invisible bug. Between reading a record and marking
+     * it sent, the health worker can edit it — the app is open, the push is on a background
+     * thread. An unconditional `UPDATE ... SET sync_status = 'SYNCED'` would then claim the
+     * *new* version had reached the server when only the old one had. The record would show as
+     * synced, the edit would never be sent, and nothing anywhere would look wrong.
+     *
+     * Returning false is therefore a normal outcome, not a failure: it means a newer version
+     * exists locally and belongs in the next pass.
+     */
+    suspend fun updateSyncStatus(
+        id: BeneficiaryId,
+        unchangedSince: Timestamp,
+        status: SyncStatus,
+    ): Boolean
 }
 
 /**

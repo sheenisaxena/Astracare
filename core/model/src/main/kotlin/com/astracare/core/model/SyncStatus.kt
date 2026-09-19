@@ -24,4 +24,19 @@ enum class SyncStatus {
 
     /** Sync was attempted and failed for a reason retrying may fix (network, 5xx). */
     FAILED,
+
+    /**
+     * The server refused this record and will refuse it again.
+     *
+     * Added on Day 13, and it is worth saying why [FAILED] would not do. FAILED means "try
+     * again later", so a record marked FAILED is re-pushed on every sync pass — forever, if
+     * the server's objection is permanent. A 4xx is the server saying the record is wrong,
+     * not that the moment was. Conflating the two produces a handset that retries a rejected
+     * record until the battery dies.
+     *
+     * Distinct from [CONFLICTED] too: a conflict means the server holds a *newer* version of
+     * a record it accepts. A rejection means it will not accept this record at all. Both need
+     * a human, but they need different humans doing different things.
+     */
+    REJECTED,
 }

@@ -14,9 +14,11 @@ import com.astracare.core.data.database.mapper.toEntity
 import com.astracare.core.domain.ordering.RecordAttentionOrder
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.RepositoryError
+import com.astracare.core.domain.sync.SyncScheduler
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
 import com.astracare.core.model.SyncStatus
+import com.astracare.core.model.Timestamp
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -44,6 +46,7 @@ import javax.inject.Singleton
 @Singleton
 class OfflineFirstBeneficiaryRepository @Inject constructor(
     private val dao: BeneficiaryDao,
+    private val syncScheduler: SyncScheduler,
     @Dispatcher(AstraCareDispatcher.IO) private val ioDispatcher: CoroutineDispatcher,
 ) : BeneficiaryRepository {
 
@@ -85,6 +88,7 @@ class OfflineFirstBeneficiaryRepository @Inject constructor(
                     rank2 = order[SECOND].name,
                     rank3 = order[THIRD].name,
                     rank4 = order[FOURTH].name,
+                    rank5 = order[FIFTH].name,
                 )
             },
         ).flow.map { page -> page.map { it.toDomain() } }
@@ -104,6 +108,11 @@ class OfflineFirstBeneficiaryRepository @Inject constructor(
             // worker as "could not save".
             try {
                 dao.upsert(beneficiary.toEntity())
+                // Requested after the local write succeeds, never before, and never awaited.
+                // The health worker's confirmation comes from the disk; sync is what happens
+                // afterwards. Enqueuing is cheap and cannot fail in a way the caller should
+                // hear about — if it does, the periodic pass collects the record anyway.
+                syncScheduler.requestPush()
                 Outcome.success()
             } catch (e: SQLException) {
                 Outcome.Failure(RepositoryError.StorageFailure(e))
@@ -112,8 +121,20 @@ class OfflineFirstBeneficiaryRepository @Inject constructor(
 
     override suspend fun pendingSync(): List<Beneficiary> =
         withContext(ioDispatcher) {
-            dao.pendingSync(SyncStatus.SYNCED.name).map { it.toDomain() }
+            dao.pendingSync(RETRYABLE_STATUSES).map { it.toDomain() }
         }
+
+    override suspend fun updateSyncStatus(
+        id: BeneficiaryId,
+        unchangedSince: Timestamp,
+        status: SyncStatus,
+    ): Boolean = withContext(ioDispatcher) {
+        dao.updateSyncStatusIfUnchanged(
+            id = id.value,
+            unchangedSince = unchangedSince.epochMillis,
+            status = status.name,
+        ) > 0
+    }
 
     private companion object {
         /**
@@ -126,12 +147,23 @@ class OfflineFirstBeneficiaryRepository @Inject constructor(
          */
         const val PAGE_SIZE = 30
 
-        // Index names for RecordAttentionOrder.byUrgency, which the DAO's four CASE arms
-        // consume positionally. Named rather than inline so the mapping between the domain's
-        // list and the query's arms is legible at a glance.
+        // Index names for RecordAttentionOrder.byUrgency, which the DAO's CASE arms consume
+        // positionally. Named rather than inline so the mapping between the domain's list and
+        // the query's arms is legible at a glance — and so adding a status shows up here as a
+        // missing name rather than as an off-by-one.
         const val FIRST = 0
         const val SECOND = 1
         const val THIRD = 2
         const val FOURTH = 3
+        const val FIFTH = 4
+
+        /**
+         * The statuses a push should retry.
+         *
+         * Derived from the enum rather than listed, so a new status is retryable only if
+         * someone says so here. REJECTED and CONFLICTED are excluded because the server has
+         * already answered for them and a person has not.
+         */
+        val RETRYABLE_STATUSES = listOf(SyncStatus.PENDING, SyncStatus.FAILED).map { it.name }
     }
 }

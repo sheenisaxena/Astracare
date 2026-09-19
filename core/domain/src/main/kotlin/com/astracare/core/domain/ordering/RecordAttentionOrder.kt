@@ -36,8 +36,10 @@ object RecordAttentionOrder {
     /**
      * Most urgent first.
      *
-     * CONFLICTED outranks FAILED because it needs a human decision; FAILED and PENDING resolve
-     * themselves once there is signal. SYNCED is last because it needs nothing.
+     * CONFLICTED and REJECTED come first because they need a human and will not resolve on
+     * their own — a conflict needs someone to choose a version, a rejection needs someone to
+     * fix the record. CONFLICTED edges ahead because it means real data exists on both sides.
+     * FAILED and PENDING resolve themselves once there is signal. SYNCED needs nothing.
      *
      * Declared as an ordered list rather than numeric priorities, so the intent *is* the
      * declaration — no magic numbers, and reordering means moving a line.
@@ -48,6 +50,7 @@ object RecordAttentionOrder {
      */
     val byUrgency: List<SyncStatus> = listOf(
         SyncStatus.CONFLICTED,
+        SyncStatus.REJECTED,
         SyncStatus.FAILED,
         SyncStatus.PENDING,
         SyncStatus.SYNCED,

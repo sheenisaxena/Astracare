@@ -45,14 +45,28 @@ class RecordAttentionOrderTest {
     }
 
     @Test
-    fun `urgency runs conflicted, failed, pending, synced`() {
+    fun `urgency runs conflicted, rejected, failed, pending, synced`() {
         val ranks = SyncStatus.entries.associateWith { RecordAttentionOrder.rankOf(it) }
 
-        // CONFLICTED needs a human decision. FAILED and PENDING resolve themselves once there
-        // is signal. SYNCED needs nothing, so it sorts last.
-        assertTrue(ranks.getValue(SyncStatus.CONFLICTED) < ranks.getValue(SyncStatus.FAILED))
+        // The two that need a person come first; the two that fix themselves follow; SYNCED
+        // needs nothing and sorts last.
+        assertTrue(ranks.getValue(SyncStatus.CONFLICTED) < ranks.getValue(SyncStatus.REJECTED))
+        assertTrue(ranks.getValue(SyncStatus.REJECTED) < ranks.getValue(SyncStatus.FAILED))
         assertTrue(ranks.getValue(SyncStatus.FAILED) < ranks.getValue(SyncStatus.PENDING))
         assertTrue(ranks.getValue(SyncStatus.PENDING) < ranks.getValue(SyncStatus.SYNCED))
+    }
+
+    @Test
+    fun `statuses needing a person outrank every status that resolves itself`() {
+        val needsAPerson = listOf(SyncStatus.CONFLICTED, SyncStatus.REJECTED)
+        val resolvesItself = listOf(SyncStatus.FAILED, SyncStatus.PENDING, SyncStatus.SYNCED)
+
+        val worstManual = needsAPerson.maxOf { RecordAttentionOrder.rankOf(it) }
+        val bestAutomatic = resolvesItself.minOf { RecordAttentionOrder.rankOf(it) }
+
+        // Stated as a property rather than a chain of pairwise comparisons, so adding a
+        // status to either group cannot quietly land it on the wrong side of the line.
+        assertTrue(worstManual < bestAutomatic)
     }
 
     @Test
@@ -65,6 +79,9 @@ class RecordAttentionOrderTest {
     }
 
     private companion object {
-        const val DAO_CASE_ARMS = 4
+        // Bumped to 5 on Day 13 when SyncStatus.REJECTED was added. This constant failing is
+        // exactly what this test is for: it pointed straight at BeneficiaryDao, which needed
+        // a fifth WHEN arm and a fifth parameter, and at the repository call that fills them.
+        const val DAO_CASE_ARMS = 5
     }
 }

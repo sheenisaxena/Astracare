@@ -3,8 +3,9 @@
 Working notes from the build sessions. Private: git-excluded via `.git/info/exclude`, so it
 never reaches the public repo.
 
-**As of 17-Sep-2026** · repo `github.com/sheenisaxena/Astracare` (public) · 59 Kotlin files ·
-Days 10, 11 and 12 written to disk, **not yet committed or pushed**.
+**As of 17-Sep-2026** · repo `github.com/sheenisaxena/Astracare` (public) · 63 Kotlin files ·
+Days 10–13 written to disk. **Nothing pushed yet** — the Day 12 build failed on a stale test
+file that must be deleted first (section 8).
 
 ---
 
@@ -22,11 +23,13 @@ Checklist, Reconciliation, Target Module Map).
 | 9 | Room as single source of truth | Done |
 | 10 | MVI — both ViewModels, pure reducers, 19 unit tests | Done |
 | 11 | Compose UI, design system, Room-backed autosave, nav shell | Done |
-| 12 | Paging 3 over Room, ordering moved into SQL | **Done** |
-| 13 | **Sync push: :core:sync + WorkManager — next up** | Pending |
-| 14–32 | Sync pull + conflicts, security, testing, perf, docs, interview prep | Pending |
+| 12 | Paging 3 over Room, ordering moved into SQL | Done |
+| 13 | Sync push: :core:sync, WorkManager, mock remote | **Done** |
+| 14 | **Sync pull + conflict resolution — next up** | Pending |
+| 15 | **MOCK INTERVIEW + applications** — protect this one | Pending |
+| 16–32 | Security, testing, perf, docs, interview prep | Pending |
 
-**Honest status on schedule.** Ten build days complete out of 32. Day 11 absorbed three
+**Honest status on schedule.** Eleven build days complete out of 32. Day 11 absorbed three
 things the plan had scattered — the UI day, the DataStore integration the Reconciliation sheet
 folded in, and the inline navigation it cut as a standalone day — so it ran well over its
 2-hour box. Worth it: the app is now demonstrable end to end.
@@ -49,9 +52,9 @@ sits immediately after them. That is the one to protect.
 ```
 :app                  MainActivity, AstraCareApp (inline 2-destination nav)
 :feature:patients     MVI + Compose: capture form, paged history list, effect observer
-:core:sync            (empty — Days 13-14)
+:core:sync            WorkManager push worker + scheduler (pull lands Day 14)
 :core:data            Room DB v2, paged DAO, beneficiaries + capture_draft, migration, repos
-:core:domain          repository INTERFACES, use cases, validation
+:core:domain          repository + remote + scheduler INTERFACES, use cases, validation
 :core:model           Beneficiary, Measurement, SyncStatus, Timestamp, CaptureDraft
 :core:common          Outcome, TimeProvider, DI modules
 :core:designsystem    theme, spacing/sizing tokens, StatusChip
@@ -66,6 +69,16 @@ The history list is a `PagingSource` over Room, 30 rows a page, placeholders off
 the ViewModel. Sort order moved out of Kotlin and into the query — the rule still lives in
 `:core:domain` as `RecordAttentionOrder` and the DAO binds its values into an `ORDER BY CASE`.
 The Day 10 sealed `Loading | Empty | Content` is gone; Paging's own `LoadState` replaced it.
+
+### Sync
+
+A saved record is pushed within seconds: the repository enqueues unique one-time work after
+each successful local write, and an hourly periodic pass sweeps anything missed. The mock
+server accepts idempotently, rejects permanently, and fails transiently every fifth call so
+retry and backoff are exercisable on a real device.
+
+`SyncStatus` gained **REJECTED** — a permanent refusal is neither FAILED (retryable) nor
+CONFLICTED (server has a newer version). No migration needed: the column stores the enum name.
 
 ### The app runs a flow
 
@@ -90,16 +103,17 @@ fails loudly rather than deleting unsynced field data.
 | GitHub Actions CI | every push / PR | no |
 | Branch protection | — | **not enabled yet** |
 
-38 unit tests. `:core:domain` has its own tests for the first time since Day 7 — five of them,
-all guarding the new Kotlin-declares / SQL-executes seam.
+46 unit tests. `:core:domain` now carries 13 of them — the ordering guard plus the push loop,
+including the stale-write case that has no visible symptom.
 
 ### Versions pinned
 
 Kotlin 2.2.10 · AGP 9.3.1 · Gradle 9.5 · JDK 21 · compileSdk 37 / minSdk 24 ·
 KSP 2.2.10-2.0.2 · Hilt 2.59.2 · Room 2.8.4 · detekt 1.23.8
 New on Day 11: `lifecycle-runtime-compose`, `hilt-navigation-compose`.
-New on Day 12: `paging-common` (in `:core:domain`), `room-paging`, `paging-compose` — all on
-the `paging = 3.5.0` and `room` refs the catalog already carried.
+New on Day 12: `paging-common` (in `:core:domain`), `room-paging`, `paging-compose`.
+New on Day 13: `work-runtime-ktx`, `androidx-hilt-work`, `androidx-hilt-compiler` — all already
+in the catalog, applied for the first time.
 
 ---
 
@@ -190,6 +204,42 @@ takes an argument — the record detail screen — is where the library wins.
 graph. `ObserveEffects` uses `repeatOnLifecycle(STARTED)`, because a bare `LaunchedEffect`
 keeps collecting from the back stack and fires navigation the user can't see.
 
+### Day 13 — sync push
+
+**The algorithm is a use case; the Worker is ten lines.** A `CoroutineWorker` can't be built
+without a `Context`, so logic inside one is testable only under instrumentation. This is the
+code that can lose field data, so it lives where plain JUnit reaches it — seven tests, no
+Android.
+
+**The stale write.** Between reading a record and marking it sent, the health worker can edit
+it. An unconditional `SET sync_status = 'SYNCED'` then claims the *new* version reached the
+server when only the old one did — the row reads SYNCED, the chip is grey, the edit is gone,
+and nothing looks wrong. The mark is conditional on `updated_at` being unchanged, and every
+fake in the suite enforces the same condition.
+
+**REJECTED, and the Day 12 guard paying for itself.** `RecordAttentionOrderTest` failed on a
+constant and pointed straight at the DAO's `CASE`, which nothing in the type system connects
+to the Kotlin enum. The exhaustive `when` in `SyncStatusPresentation` caught the UI half at
+compile time.
+
+**`pendingSync` narrowed to retryable.** "Not SYNCED" also matches REJECTED and CONFLICTED, so
+the old query had the handset re-pushing refused records forever. They still count toward the
+sync banner — "what should we send" and "what isn't safe yet" are different questions.
+
+**A transient failure stops the whole pass.** It's almost always the connection, not the
+record, so the next forty attempts fail identically — battery and radio a field handset can't
+spare. A permanent rejection does the opposite and the loop continues.
+
+**`ExistingWorkPolicy.KEEP`, not REPLACE.** REPLACE would throw away a worker two minutes into
+its backoff and restart the curve — the opposite of what backoff is for.
+
+**Device-minted IDs pay off twice.** They made offline creation possible on Day 7; they're also
+what makes retrying a lost response safe, because the server upserts by a key it didn't choose.
+
+**Three pieces that only work together.** `@HiltWorker` + the KSP processor + `Configuration.
+Provider` with the manifest initializer removed. Any one missing fails at *runtime* with a
+message naming the worker rather than the cause.
+
 ---
 
 ## 4. Problems hit, and what they taught
@@ -216,17 +266,22 @@ Also corrected along the way: Hilt is **2.59.2**, not the 2.57.1 the docs page r
 Worth being precise about, because "it compiles" was assumed on earlier days and is not
 assumed here.
 
-**Verified:** all domain, model, MVI and reducer code compiles under Kotlin 2.2.10 against
-real `paging-common` classes. All **38 unit tests pass**, including autosave debounce timing on
+**Verified:** all domain, model, MVI, reducer and sync code compiles under Kotlin 2.2.10
+against real `paging-common` and WorkManager 2.11.2 classes. All **46 unit tests pass**, including autosave debounce timing on
 virtual time. Every Compose file type-checks clean against real Compose 1.12.1 / Material3
 1.4.0 / paging-compose 3.5.0 artifacts and a real `android.jar` — zero unresolved references.
 **detekt 1.23.8 with the project's own `config/detekt/detekt.yml` and the formatting plugin is
-clean across all 57 files.**
+clean across all 70 files.**
 
 **Not verified — run the build before trusting these:**
 
-- **The Hilt graph.** `CaptureViewModel` gained three constructor dependencies and there are
-  two new `@Binds`/`@Provides`. KSP has to resolve all of it; nothing here can check that.
+- **The Hilt graph — now the biggest unknown.** Day 13 added `@HiltWorker` (assisted
+  injection), a new KSP processor in `:core:sync`, `SyncModule`, `WorkManagerModule`, and two
+  injected fields on the Application. None of it can be checked without a real build, and all
+  of it fails at runtime rather than compile time.
+- **Whether WorkManager actually uses `HiltWorkerFactory`.** If the manifest edit is wrong the
+  build stays green and the first push crashes with "Could not instantiate
+  PushBeneficiariesWorker".
 - **Room codegen and the migration SQL.** The `CREATE TABLE` is hand-matched to what Room
   generates for `DraftEntity`. Room validates it at open time and aborts on any mismatch, so
   if it's wrong it will be obvious immediately — on a device that already holds a v1 database.
@@ -267,31 +322,40 @@ clean across all 57 files.**
 
 ---
 
-## 7. Next session — Day 13 (sync push)
+## 7. Next session — Day 14 (sync pull + conflict resolution)
 
-New `:core:sync` module, finally non-empty. A `@HiltWorker` that reads `pendingSync()` and
-pushes to the mock remote, with a network constraint and exponential backoff. Idempotent
-writes, because a worker that retries after a response was lost must not create a duplicate
-record — device-generated UUIDs already make that possible.
+The other direction: fetch server changes, detect conflicts, resolve them. This is the day the
+project's hardest claim gets made, so the decision log entry matters as much as the code —
+"why last-write-wins over vector clocks" is a question that gets asked.
 
-Watch for: `hilt-work` and `androidx-hilt-compiler` are in the catalog but have never been
-applied, so `:core:sync` needs its own Hilt/KSP wiring and `AstraCareApplication` needs a
-`Configuration.Provider`. Also, Paging's retry branch and `SyncStatus.FAILED` both become
-reachable for the first time — that is when the LoadState UI deferred on Day 12 earns its
-place.
+Three things Day 13 left deliberately for Day 14:
 
-**Protect Day 15.** It is the mock interview plus an applications batch, immediately after the
-sync work, and it is the first job-search day in six weeks that has not already slipped.
+- **`SyncStatus.CONFLICTED` is never set by anything.** Push cannot produce a conflict; only a
+  pull can discover one.
+- **Sync failures are invisible.** A record just sits PENDING. Day 14 has the UI surface.
+- **Paging's error/retry branch** becomes reachable once a pull can fail — that's when the
+  LoadState UI deferred on Day 12 earns its place.
+
+Watch for: `Timestamp` comparison is the conflict rule, and DECISION_LOG 2.6 already records
+that client wall-clock time is not trustworthy (Kronos is the noted remedy, deliberately not
+adopted). Restate that limit honestly rather than presenting timestamp comparison as sound.
+
+**Then protect Day 15.** Mock interview plus an applications batch. It is the first job-search
+day in six weeks that has not already slipped, and it sits directly after the hardest build day
+in the plan — which is exactly the position from which days get skipped.
 
 **Standing workflow per day:** build → `./gradlew detekt test assembleDebug` → commit with a
 body that names the rejected alternative → push → append to `docs/DECISION_LOG.md`.
 
-## Files to delete by hand
+## 8. Files to delete by hand — BLOCKING THE BUILD
 
-Neither the bridge nor I can delete on your disk. Outstanding:
+Neither the bridge nor I can delete on your disk. Both are still present:
 
-- `app/src/main/kotlin/com/astracare/ui/theme/` — three files, superseded on Day 11 by
-  `:core:designsystem` (skip if you already did this)
 - `feature/patients/src/test/kotlin/com/astracare/feature/patients/BeneficiaryListUiStateTest.kt`
-  — tests `toUiState()`, which Day 12 removed. **The build will not compile until this is
-  gone.**
+  — tests `toUiState()`, removed on Day 12. **This is what failed your last push.**
+- `app/src/main/kotlin/com/astracare/ui/theme/` — three files, dead since Day 11.
+
+```bash
+git rm feature/patients/src/test/kotlin/com/astracare/feature/patients/BeneficiaryListUiStateTest.kt
+git rm -r app/src/main/kotlin/com/astracare/ui/theme
+```

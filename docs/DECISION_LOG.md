@@ -930,6 +930,179 @@ it can, the honest move is to move the assertion, not to improve the fake.
 
 ---
 
+# Part 8 — Pushing records to a server
+
+Day 13. `:core:sync` stops being an empty directory. A record captured offline now reaches the
+mock server on its own, and the chip on the history screen flips from Pending to Synced without
+anyone asking it to.
+
+## 8.1 The algorithm is a use case; the Worker is ten lines
+
+`PushPendingRecordsUseCase` holds the read-push-mark loop. `PushBeneficiariesWorker` calls it
+and maps the result to a WorkManager `Result`.
+
+The reason is testability, and here it is not a general principle but a specific one: **this is
+the code that can lose a health worker's field data.** A `CoroutineWorker` cannot be
+constructed without a `Context` and `WorkerParameters`, so logic written inside one is testable
+only under instrumentation or Robolectric — the slowest tests in any project, and therefore the
+ones that quietly stop being written. Written as a plain class with two injected interfaces,
+every branch runs in milliseconds.
+
+`PushPendingRecordsUseCaseTest` covers seven paths including the one below. None of them needs
+Android.
+
+**Concept — put the logic where the tests can reach it.** "Testable" is not a quality of code
+in the abstract; it is a question of what has to exist before a test can run. Framework base
+classes are where that cost hides.
+
+## 8.2 The stale write: a bug with no symptom
+
+The dangerous moment in any push loop is between reading a record and marking it sent. The app
+is open, the push is on a background thread, and the health worker can edit the record in that
+window.
+
+Mark it SYNCED afterwards and the app has declared the *new* version sent when only the old one
+was. Nothing looks wrong: the row reads SYNCED, the chip is grey, the sync count is correct.
+The edit is simply gone, and nobody finds out until someone compares the handset with the
+server — which, for an app whose users are in villages, may be never.
+
+So the mark is conditional:
+
+```sql
+UPDATE beneficiaries SET sync_status = :status
+WHERE id = :id AND updated_at = :unchangedSince
+```
+
+`updateSyncStatus` returns whether a row actually changed. False is a normal outcome, not a
+failure — it means a newer version exists locally and belongs in the next pass.
+
+Every fake in the test suite implements the same condition. A fake that marked unconditionally
+would let this bug pass a test, which is the one thing a fake must never do.
+
+**Concept — the bugs worth engineering against are the ones with no symptom.** A crash gets
+fixed. Silent data loss gets discovered by the user, months later, in the form of mistrust.
+
+## 8.3 REJECTED is a fifth status, and the Day 12 guard caught it
+
+A server can refuse a record permanently — a validation error, a schema it will not accept.
+That is not FAILED, whose documented meaning is "retrying may fix this", because retrying never
+will: the handset would re-offer the record on every pass until the battery died. It is not
+CONFLICTED either, which means the server holds a *newer* version of a record it accepts.
+
+Adding `SyncStatus.REJECTED` rippled exactly as far as Day 12 predicted it would:
+
+- `RecordAttentionOrder.byUrgency` needed a fifth entry.
+- `BeneficiaryDao.pagedByAttention` needed a fifth `WHEN` arm and a fifth parameter.
+- `SyncStatusPresentation` needed a branch, and `strings.xml` two entries.
+
+The first two are connected by nothing the compiler can see — a Kotlin list and a SQL `CASE`.
+`RecordAttentionOrderTest` is what pointed at them, by failing on a constant that says how many
+arms the query has. The third was caught by the compiler, because that `when` is exhaustive
+over a sealed set with no `else`.
+
+**Concept — a guard is worth what it catches the day you forget.** The ordering test was
+written on Day 12 for a hypothetical. It earned itself back on Day 13.
+
+No migration was needed: `sync_status` is TEXT storing the enum's *name*, so an added value is
+just a value the column has not seen yet. Had it been the ordinal, this would have silently
+reinterpreted existing rows — the reason that decision was made on Day 9.
+
+## 8.4 `pendingSync` narrowed from "not synced" to "retryable"
+
+The old query was `WHERE sync_status != 'SYNCED'`, which was right when SYNCED and PENDING were
+effectively the only states. It now also matches REJECTED and CONFLICTED — records the server
+has already answered for, and which need a person rather than another attempt. Left alone, the
+handset would re-push them on every pass forever.
+
+It now takes the retryable set explicitly: PENDING and FAILED. Those records still count toward
+the sync banner, because they are still not on the server and the health worker needs to know
+that. "What should we send" and "what is not safe yet" turn out to be different questions, and
+one query cannot answer both.
+
+## 8.5 A transient failure stops the whole pass
+
+On `TransientFailure` the loop returns immediately rather than trying the next record.
+
+A transient failure is almost always the connection, not the record. Continuing means forty
+more attempts that will fail the same way, each waking the radio, on a handset that has to last
+a working day in a place with no charger. Everything already accepted stays marked; the rest is
+still PENDING, which is the database telling the truth about what needs sending.
+
+A permanent rejection is the opposite and the loop keeps going, because the server is clearly
+reachable and the next record may well be fine.
+
+## 8.6 Two schedules, and neither is enough alone
+
+`requestPush()` fires after every successful local write. `ensurePeriodicPush()` runs hourly.
+
+Only the first, and a push that failed while the app was closed waits for the next capture —
+which on a quiet day is tomorrow. Only the second, and a record captured with full signal and
+the app open sits Pending for up to fifteen minutes, which teaches a health worker that sync
+does not work.
+
+Three WorkManager choices worth naming:
+
+**`ExistingWorkPolicy.KEEP`, not `REPLACE`.** Capturing five records in a minute calls
+`requestPush()` five times. KEEP lets the queued pass run, and since every pass sends
+*everything* pending, the later records are included anyway. REPLACE would cancel and requeue
+each time — so a worker two minutes into its backoff would be thrown away and restarted at the
+beginning of the curve, which is the opposite of what backoff is for.
+
+**`NetworkType.CONNECTED`, not `UNMETERED`.** A record is a few hundred bytes. Waiting for wifi
+means a worker walking a village on mobile data syncs nothing all day, and wifi is not
+something most of them see before going home. Metered data is the normal case here.
+
+**Hourly, not the 15-minute minimum.** The periodic pass is a backstop for a failure, not the
+primary path. Waking the radio four times an hour to find nothing to send is a real battery
+cost on the handsets this targets.
+
+The one-time pass also gives up after five attempts rather than retrying forever, and lets the
+periodic one take over. Nothing is lost — the records are still PENDING, and the database is
+the source of truth about what needs sending, not the work queue.
+
+## 8.7 The mock server fails in the shapes a real one does
+
+A real backend was ruled out during planning as unbounded work that proves nothing about
+Android engineering. What a mock still owes is **realistic failure**, because the failure modes
+are what the sync engine is built around. A stub that always succeeds ships every error branch
+untested while looking like coverage.
+
+So `MockRemoteBeneficiarySource` does three things a server does: accepts idempotently, rejects
+permanently, and fails transiently every fifth call.
+
+The idempotency is the one that matters most. A response can be lost after the server commits —
+the connection drops between the write and the acknowledgement — and the only safe client
+behaviour is to send again. That is only safe because **IDs are minted on the device**: the
+server upserts by a key it did not choose. A server assigning its own IDs would create a
+duplicate for every lost response, and the health worker would have no way to tell which record
+was real. That was decided on Day 7 for offline-creation reasons; this is the second, larger
+payoff.
+
+The transient failure is deterministic — every fifth call — rather than random. A random mock
+produces a demo that sometimes misbehaves and a bug nobody can reproduce.
+
+## 8.8 Three pieces that only work together
+
+`@HiltWorker` needs all of:
+
+1. the annotation, from `androidx.hilt:hilt-work`;
+2. `androidx.hilt:hilt-compiler` on KSP, which generates the factory entry;
+3. `AstraCareApplication` implementing `Configuration.Provider` and supplying
+   `HiltWorkerFactory`, **with the default `WorkManagerInitializer` removed from the manifest**.
+
+Any one missing produces a **runtime** failure, not a build failure — "Could not instantiate
+PushBeneficiariesWorker", a message that names the worker rather than the two lines of manifest
+or the one missing KSP declaration that actually caused it.
+
+Also worth recording: `Configuration.Provider` became a `val` property in WorkManager 2.9.
+Overriding the old `getWorkManagerConfiguration()` method still compiles — as an unrelated
+function that nothing calls — so the configuration is silently never read.
+
+**Concept — wiring that fails at runtime deserves a comment where the wiring is.** All three
+sites carry one, because the failure gives no hint which of them is missing.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
@@ -948,7 +1121,10 @@ it can, the honest move is to move the assertion, not to improve the fake.
 | ~~History list is a plain `LazyColumn`, not Paging~~ | **Resolved** — Paging 3 over Room (Part 7) | Closed |
 | The SQL `ORDER BY` has no test; only the domain half of the contract is pinned (7.2, 7.6) | Needs an instrumented test against a real database | Days 18-20 |
 | `CASE`-based ordering cannot use an index (7.2) | Correct at one health worker's scale | With the benchmark work, as an indexed rank column + backfill migration |
-| Paging's error/retry branch is unimplemented (7.3) | A local database cannot fail a load | With RemoteMediator, Days 13-14 |
+| Paging's error/retry branch is unimplemented (7.3) | Still true — push does not go through Paging; only a pull via RemoteMediator makes a load failure reachable | Day 14 |
+| No test that the Worker maps PushSummary to the right WorkManager Result (8.1) | The algorithm is covered; the ten-line adapter is not | Days 18-20, with `work-testing` |
+| Sync failures are invisible in the UI — a record just stays PENDING (8.5) | No surface for it yet | Day 14, alongside conflict resolution |
+| `MockRemoteBeneficiarySource` holds accepted records in memory only (8.7) | Fine for a mock; a restart forgets the 'server' | Stays a mock — stated scope boundary |
 | KMP variant split: domain compiles against `paging-common-desktop`, app ships `-android` (7.1) | Expected and routine | Watch for it if a NoSuchMethodError appears |
 | No logging abstraction — `RoomDraftRepository` calls `android.util.Log` directly (6.4) | Knowing shortcut | With the sync engine, which needs real diagnostics |
 | Hand-rolled navigation (6.5) | Correct at two destinations | The first destination that takes an argument |

@@ -2,6 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!--
+      WorkManager must NOT initialise itself. PushBeneficiariesWorker has an injected
+      dependency, so it needs HiltWorkerFactory, which AstraCareApplication supplies via
+      Configuration.Provider. That only takes effect if the framework has not already started
+      with its default factory.
+
+      Removing the initializer below is the step everyone forgets. Without it the build is
+      green and the app crashes the first time a worker runs, with a message naming the worker
+      rather than these four lines.
+    -->
     <application
         android:name=".AstraCareApplication"
         android:allowBackup="true"
@@ -12,6 +22,17 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Astracare">
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
