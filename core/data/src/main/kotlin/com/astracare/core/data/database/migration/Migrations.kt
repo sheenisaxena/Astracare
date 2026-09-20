@@ -2,6 +2,7 @@ package com.astracare.core.data.database.migration
 
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.astracare.core.data.database.entity.SessionEntity
 import com.astracare.core.data.database.entity.SyncStateEntity
 
 /**
@@ -96,6 +97,65 @@ val MIGRATION_2_3 = object : Migration(V2, V3) {
 }
 
 /**
+ * Adds `audit_log` and `session`, and makes the audit table append-only. Day 17.
+ *
+ * ## Two tables in one migration, and why not two migrations
+ *
+ * They arrive together because they are one feature: a role that nothing records is an
+ * unaudited role, and an audit trail with no actor is a list of anonymous events. Splitting
+ * them into 3→4 and 4→5 would create a version in which half the feature exists, which is a
+ * state no device would ever be in and a migration test would have to cover anyway.
+ *
+ * ## The triggers, and the half of the problem a migration cannot solve
+ *
+ * [createAuditLogTriggers] is called here for devices that upgrade — and Room creates a fresh
+ * schema from the compiled entities WITHOUT running any migration, so a new install would get
+ * the table and no triggers. `DatabaseModule` installs a `RoomDatabase.Callback` that calls the
+ * same function on create. Room does not validate triggers, so nothing would have complained
+ * about the gap; it would simply not have been append-only on most devices.
+ *
+ * ## No backfill, and this time that is not a decision
+ *
+ * There is nothing to backfill. An audit trail that begins by inventing entries for events
+ * nobody observed would be worse than one that starts empty, and [SessionEntity] is left
+ * unwritten so the role resolves to its default rather than being asserted.
+ */
+val MIGRATION_3_4 = object : Migration(V3, V4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Written to match exactly what Room generates for `AuditEntryEntity`, including the two
+        // indices — Room validates the result against the compiled schema at open time and
+        // aborts on any difference, and a missing index is a difference.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `audit_log` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `actor` TEXT NOT NULL,
+                `action` TEXT NOT NULL,
+                `record_id` TEXT,
+                `at` INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_audit_log_at` ON `audit_log` (`at`)")
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_audit_log_record_id` ON `audit_log` (`record_id`)",
+        )
+
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `session` (
+                `id` INTEGER NOT NULL,
+                `active_role` TEXT NOT NULL,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+
+        createAuditLogTriggers(db)
+    }
+}
+
+/**
  * Every migration, in the order Room should consider them.
  *
  * A single list rather than a `vararg` at the call site, so that adding a migration is one
@@ -107,7 +167,7 @@ val MIGRATION_2_3 = object : Migration(V2, V3) {
  * detekt's `SpreadOperator` rule rejects. A list is also the better type for a public
  * constant: arrays compare by identity and are mutable in place.
  */
-val ALL_MIGRATIONS: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3)
+val ALL_MIGRATIONS: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
 /**
  * Schema versions, named so a migration's endpoints read as a direction rather than as two
@@ -122,3 +182,4 @@ val ALL_MIGRATIONS: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3)
 private const val V1 = 1
 private const val V2 = 2
 private const val V3 = 3
+private const val V4 = 4

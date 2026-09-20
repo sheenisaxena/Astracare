@@ -2,17 +2,23 @@ package com.astracare.core.domain.usecase
 
 import androidx.paging.PagingData
 import com.astracare.core.common.Outcome
+import com.astracare.core.common.time.TimeProvider
 import com.astracare.core.domain.remote.PullOutcome
 import com.astracare.core.domain.remote.RemoteBeneficiarySource
 import com.astracare.core.domain.remote.SyncCursor
+import com.astracare.core.domain.repository.AuditRepository
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.RepositoryError
+import com.astracare.core.domain.repository.SessionRepository
 import com.astracare.core.domain.repository.SyncStateRepository
+import com.astracare.core.model.AuditAction
+import com.astracare.core.model.AuditEntry
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
 import com.astracare.core.model.Measurement
 import com.astracare.core.model.SyncStatus
 import com.astracare.core.model.Timestamp
+import com.astracare.core.model.UserRole
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -41,7 +47,17 @@ class PullRemoteChangesUseCaseTest {
     private val syncState = FakeSyncStateRepository()
     private val remote = ScriptedPullSource()
 
-    private val pullRemoteChanges = PullRemoteChangesUseCase(repository, syncState, remote)
+    private val session = FakePullSessionRepository()
+    private val audit = CountingAuditRepository()
+
+    private val pullRemoteChanges = PullRemoteChangesUseCase(
+        repository = repository,
+        syncState = syncState,
+        remote = remote,
+        session = session,
+        audit = audit,
+        timeProvider = TimeProvider { Timestamp(FIXED_NOW) },
+    )
 
     @Test
     fun `a record the device has never seen is inserted as synced`() = runTest {
@@ -78,6 +94,34 @@ class PullRemoteChangesUseCaseTest {
         // which is the entire promise of detecting rather than resolving.
         assertEquals("Kotri", repository.villageOf("1"))
         assertEquals(PullSummary.Complete(applied = 0, conflicted = 1), summary)
+        // A conflict is the one sync event a person has to act on, so it is the one the trail
+        // must carry.
+        assertEquals(listOf(AuditAction.CONFLICT_DETECTED), audit.actions)
+    }
+
+    @Test
+    fun `a pull that resolves cleanly writes nothing to the audit trail`() = runTest {
+        repository.seed(record("1", village = "Kotri", status = SyncStatus.SYNCED))
+        remote.serve(record("1", village = "Kotri Kalan"))
+
+        pullRemoteChanges()
+
+        // Applying a server change to a record nobody was editing is routine. Logging it would
+        // bury the conflicts under a line per record per pass.
+        assertTrue(audit.actions.isEmpty())
+    }
+
+    @Test
+    fun `a conflict mark refused by a concurrent edit is not logged`() = runTest {
+        repository.seed(record("1", village = "Kotri", status = SyncStatus.PENDING))
+        remote.serve(record("1", village = "Kotri Kalan"))
+        repository.onRead { repository.simulateLocalEdit("1", village = "Kotra", newUpdatedAt = 2_000L) }
+
+        pullRemoteChanges()
+
+        // Nothing was marked, so nothing was conflicted. An entry here would describe an event
+        // that did not happen — worse than a missing one, because it reads as true.
+        assertTrue(audit.actions.isEmpty())
     }
 
     @Test
@@ -172,6 +216,32 @@ class PullRemoteChangesUseCaseTest {
         updatedAt = Timestamp(updatedAt),
         syncStatus = status,
     )
+
+    private companion object {
+        const val FIXED_NOW = 1_700_000_000_000L
+    }
+}
+
+private class FakePullSessionRepository : SessionRepository {
+    override fun observeActiveRole(): Flow<UserRole> = flowOf(UserRole.Default)
+    override suspend fun activeRole(): UserRole = UserRole.Default
+    override suspend fun setActiveRole(role: UserRole) = Unit
+}
+
+/** Records only what was appended; the pull never reads the trail back. */
+private class CountingAuditRepository : AuditRepository {
+    val actions = mutableListOf<AuditAction>()
+
+    override suspend fun append(
+        actor: UserRole,
+        action: AuditAction,
+        recordId: BeneficiaryId?,
+        at: Timestamp,
+    ) {
+        actions += action
+    }
+
+    override fun observeRecent(limit: Int): Flow<List<AuditEntry>> = flowOf(emptyList())
 }
 
 /**

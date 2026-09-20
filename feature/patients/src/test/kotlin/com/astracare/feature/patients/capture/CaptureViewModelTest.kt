@@ -4,17 +4,22 @@ import androidx.paging.PagingData
 import app.cash.turbine.test
 import com.astracare.core.common.Outcome
 import com.astracare.core.common.time.TimeProvider
+import com.astracare.core.domain.repository.AuditRepository
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.DraftRepository
 import com.astracare.core.domain.repository.RepositoryError
+import com.astracare.core.domain.repository.SessionRepository
 import com.astracare.core.domain.usecase.RestoreDraftUseCase
 import com.astracare.core.domain.usecase.SaveBeneficiaryUseCase
 import com.astracare.core.domain.usecase.SaveDraftUseCase
+import com.astracare.core.model.AuditAction
+import com.astracare.core.model.AuditEntry
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
 import com.astracare.core.model.CaptureDraft
 import com.astracare.core.model.SyncStatus
 import com.astracare.core.model.Timestamp
+import com.astracare.core.model.UserRole
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -61,6 +66,8 @@ class CaptureViewModelTest {
     private val repository = RecordingBeneficiaryRepository()
     private val drafts = FakeDraftRepository()
     private val clock = TimeProvider { Timestamp(FIXED_NOW) }
+    private val session = AlwaysFieldWorkerSession()
+    private val audit = IgnoringAuditRepository()
 
     private lateinit var viewModel: CaptureViewModel
 
@@ -76,7 +83,7 @@ class CaptureViewModelTest {
     }
 
     private fun buildViewModel() = CaptureViewModel(
-        saveBeneficiary = SaveBeneficiaryUseCase(repository, clock),
+        saveBeneficiary = SaveBeneficiaryUseCase(repository, session, audit, clock),
         restoreDraft = RestoreDraftUseCase(drafts),
         saveDraft = SaveDraftUseCase(drafts),
         timeProvider = clock,
@@ -329,4 +336,27 @@ private class FakeDraftRepository : DraftRepository {
     override suspend fun clear() {
         stored = null
     }
+}
+
+/**
+ * The capture screen is only reachable by a role that may capture, so these tests fix the role
+ * rather than parameterising it. What a role is *allowed* to do is covered by
+ * `RolePermissionsTest`, and what the save use case does about it by `AuditTrailTest`.
+ */
+private class AlwaysFieldWorkerSession : SessionRepository {
+    override fun observeActiveRole(): Flow<UserRole> = MutableStateFlow(UserRole.FIELD_WORKER)
+    override suspend fun activeRole(): UserRole = UserRole.FIELD_WORKER
+    override suspend fun setActiveRole(role: UserRole) = Unit
+}
+
+/** Audit content is asserted in `AuditTrailTest`; here it only has to not be in the way. */
+private class IgnoringAuditRepository : AuditRepository {
+    override suspend fun append(
+        actor: UserRole,
+        action: AuditAction,
+        recordId: BeneficiaryId?,
+        at: Timestamp,
+    ) = Unit
+
+    override fun observeRecent(limit: Int): Flow<List<AuditEntry>> = MutableStateFlow(emptyList())
 }

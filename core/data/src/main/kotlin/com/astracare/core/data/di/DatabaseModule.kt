@@ -2,13 +2,18 @@ package com.astracare.core.data.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.astracare.core.data.crypto.DatabasePassphrase
 import com.astracare.core.data.database.AstraCareDatabase
 import com.astracare.core.data.database.DATABASE_NAME
+import com.astracare.core.data.database.dao.AuditDao
 import com.astracare.core.data.database.dao.BeneficiaryDao
 import com.astracare.core.data.database.dao.DraftDao
+import com.astracare.core.data.database.dao.SessionDao
 import com.astracare.core.data.database.dao.SyncStateDao
 import com.astracare.core.data.database.migration.ALL_MIGRATIONS
+import com.astracare.core.data.database.migration.createAuditLogTriggers
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -72,6 +77,7 @@ object DatabaseModule {
             klass = AstraCareDatabase::class.java,
             name = DATABASE_NAME,
         ).openHelperFactory(SupportOpenHelperFactory(passphrase.get()))
+            .addCallback(auditLogTriggerCallback)
 
         // Registered from a single list in the migration package, so adding a migration is
         // one edit there rather than two. A migration that exists but is never registered is
@@ -101,6 +107,30 @@ object DatabaseModule {
     @Provides
     fun providesSyncStateDao(database: AstraCareDatabase): SyncStateDao =
         database.syncStateDao()
+
+    @Provides
+    fun providesAuditDao(database: AstraCareDatabase): AuditDao = database.auditDao()
+
+    @Provides
+    fun providesSessionDao(database: AstraCareDatabase): SessionDao = database.sessionDao()
+
+    /**
+     * Installs the append-only triggers on a database Room has just created.
+     *
+     * The half of the guarantee a migration cannot provide. Room builds a fresh schema from the
+     * compiled `@Entity` classes and runs no migration at all, and `@Entity` cannot declare a
+     * trigger — so without this, `audit_log` would be append-only on upgraded devices and
+     * silently mutable on every new install. Room does not validate triggers either, so nothing
+     * would have reported the gap.
+     *
+     * `onCreate`, not `onOpen`: the statements are idempotent, but running two `CREATE TRIGGER`
+     * calls on every single app launch is work for nothing.
+     */
+    private val auditLogTriggerCallback = object : RoomDatabase.Callback() {
+        override fun onCreate(db: SupportSQLiteDatabase) {
+            createAuditLogTriggers(db)
+        }
+    }
 
     /** The native library name, which is not the artifact name and not the class name. */
     private const val SQLCIPHER_LIBRARY = "sqlcipher"

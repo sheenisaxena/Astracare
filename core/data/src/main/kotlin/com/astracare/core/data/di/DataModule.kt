@@ -2,11 +2,15 @@ package com.astracare.core.data.di
 
 import com.astracare.core.data.remote.MockRemoteBeneficiarySource
 import com.astracare.core.data.repository.OfflineFirstBeneficiaryRepository
+import com.astracare.core.data.repository.RoomAuditRepository
 import com.astracare.core.data.repository.RoomDraftRepository
+import com.astracare.core.data.repository.RoomSessionRepository
 import com.astracare.core.data.repository.RoomSyncStateRepository
 import com.astracare.core.domain.remote.RemoteBeneficiarySource
+import com.astracare.core.domain.repository.AuditRepository
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.DraftRepository
+import com.astracare.core.domain.repository.SessionRepository
 import com.astracare.core.domain.repository.SyncStateRepository
 import dagger.Binds
 import dagger.Module
@@ -65,6 +69,18 @@ abstract class DataModule {
     abstract fun bindsSyncStateRepository(
         repository: RoomSyncStateRepository,
     ): SyncStateRepository
+
+    /**
+     * The trail and the role get their own bindings for the same reason the cursor does:
+     * neither describes a beneficiary, and both must survive operations that clear records.
+     */
+    @Binds
+    abstract fun bindsAuditRepository(repository: RoomAuditRepository): AuditRepository
+
+    @Binds
+    abstract fun bindsSessionRepository(
+        repository: RoomSessionRepository,
+    ): SessionRepository
 
     /**
      * The mock server. Bound here rather than in `:core:sync` because it is a data source,

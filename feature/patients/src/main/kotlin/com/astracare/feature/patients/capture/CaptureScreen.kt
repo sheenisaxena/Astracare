@@ -57,6 +57,7 @@ fun CaptureRoute(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val saveFailedMessage = stringResource(R.string.capture_save_failed)
+    val notPermittedMessage = stringResource(R.string.capture_save_not_permitted)
 
     ObserveEffects(viewModel.effects) { effect ->
         when (effect) {
@@ -65,6 +66,12 @@ fun CaptureRoute(
             // Shown rather than navigated away from: the form still holds everything the
             // health worker typed, and the reducer deliberately kept it there.
             is CaptureEffect.SaveFailed -> snackbarHostState.showSnackbar(saveFailedMessage)
+
+            // Distinct wording from a storage failure, because the two ask for different
+            // things: one says try again, this one says you are in the wrong role. Telling
+            // someone to retry an action that will always be refused is the worse message.
+            CaptureEffect.SaveNotPermitted ->
+                snackbarHostState.showSnackbar(notPermittedMessage)
         }
     }
 

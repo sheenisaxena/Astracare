@@ -6,7 +6,11 @@ import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import com.astracare.core.domain.usecase.ObserveAwaitingSyncCountUseCase
 import com.astracare.core.domain.usecase.ObserveBeneficiariesUseCase
+import com.astracare.core.domain.usecase.ObservePermissionsUseCase
+import com.astracare.core.domain.usecase.Permissions
+import com.astracare.core.domain.usecase.SwitchRoleUseCase
 import com.astracare.core.model.Beneficiary
+import com.astracare.core.model.UserRole
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -25,7 +29,7 @@ import javax.inject.Inject
  * from this ViewModel through `:core:domain`'s use cases and repository interface to
  * `:core:data`'s Room-backed implementation, with none of those modules depending on `:app`.
  *
- * Two outputs, for two different kinds of thing:
+ * Three outputs, for three different kinds of thing:
  *
  *  - [records] is a paged stream. It is deliberately **not** a `StateFlow`: `PagingData` is a
  *    stream of change events that the Compose layer replays into a list, not a value with a
@@ -33,6 +37,7 @@ import javax.inject.Inject
  *    collector a snapshot of someone else's scroll position.
  *  - [syncSummary] is a `StateFlow`, because a count is exactly the kind of thing that has a
  *    current value.
+ *  - [permissions] is a `StateFlow` for the same reason, and drives what the screen offers.
  *
  * ## Why cachedIn is not optional
  *
@@ -51,6 +56,8 @@ import javax.inject.Inject
 class BeneficiaryListViewModel @Inject constructor(
     observeBeneficiaries: ObserveBeneficiariesUseCase,
     observeAwaitingSyncCount: ObserveAwaitingSyncCountUseCase,
+    observePermissions: ObservePermissionsUseCase,
+    private val switchRole: SwitchRoleUseCase,
 ) : ViewModel() {
 
     val records: Flow<PagingData<Beneficiary>> = observeBeneficiaries()
@@ -70,6 +77,23 @@ class BeneficiaryListViewModel @Inject constructor(
             initialValue = SyncSummaryUiState.Unknown,
         )
 
+    /**
+     * What the active role may do. Re-emits on every role change, so the screen re-gates
+     * itself without anything having to remember to refresh.
+     *
+     * The initial value is the **least** privileged role, not the real one, and that is the
+     * whole reason it is stated explicitly. `stateIn` needs a value before the database
+     * answers, and seeding it with anything permissive would flash a capture button at a
+     * supervisor for one frame — an affordance appearing and then being taken away, which
+     * reads as a bug and, on a slow first query, is long enough to tap.
+     */
+    val permissions: StateFlow<Permissions> = observePermissions()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
+            initialValue = Permissions(UserRole.Default),
+        )
+
     private val internalEffects = Channel<BeneficiaryListEffect>(Channel.BUFFERED)
     val effects: Flow<BeneficiaryListEffect> = internalEffects.receiveAsFlow()
 
@@ -81,9 +105,20 @@ class BeneficiaryListViewModel @Inject constructor(
      * without changing it.
      */
     fun dispatch(intent: BeneficiaryListIntent) {
+        // RoleSelected is the one intent on this screen that is not navigation: it changes
+        // durable state and writes an audit entry. Returning early rather than folding it into
+        // the effect mapping keeps that `when` exhaustive over effects only, so a future
+        // state-changing intent cannot be silently turned into a navigation event.
+        if (intent is BeneficiaryListIntent.RoleSelected) {
+            viewModelScope.launch { switchRole(intent.role) }
+            return
+        }
+
         val effect = when (intent) {
             is BeneficiaryListIntent.RecordClicked -> BeneficiaryListEffect.OpenRecord(intent.id)
             BeneficiaryListIntent.AddRecordClicked -> BeneficiaryListEffect.OpenCapture
+            BeneficiaryListIntent.AuditTrailClicked -> BeneficiaryListEffect.OpenAuditTrail
+            is BeneficiaryListIntent.RoleSelected -> return
         }
         viewModelScope.launch { internalEffects.send(effect) }
     }

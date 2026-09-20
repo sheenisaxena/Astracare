@@ -123,14 +123,18 @@ git config core.hooksPath   # should print .githooks
   levels defined once
 - Version catalog covering the full dependency set
 - Hilt graph bootstrapped, with injected coroutine dispatchers for testability
+- Domain model and use cases; Room as the single source of truth, schema v4 with hand-written
+  migrations and no destructive fallback
+- Compose capture screen with MVI state management; paged record history ordered in SQL
+- WorkManager sync: push, pull, and conflict detection keyed on sync status rather than clocks
+- Database encrypted at rest with SQLCipher, passphrase wrapped by an Android Keystore key
+- Two roles with a declarative permission matrix, and an append-only audit trail
 
 **Next**
 
-- Domain model and use cases; Room database as single source of truth
-- Compose capture screen with MVI state management; paged record history
-- WorkManager sync with conflict resolution
-- Field-level PII encryption, role gating, append-only audit log
-- Unit and UI test suites; macrobenchmark with baseline profiles
+- Unit and UI test suites; instrumented migration and query tests
+- Macrobenchmark module with baseline profiles
+- R8 enabled for release builds
 
 ## Design decisions
 
@@ -146,11 +150,52 @@ Stated because they are choices, not omissions:
 - **No real backend.** The remote source is a mock; a production server would demonstrate
   nothing about Android engineering.
 - **Client-side role gating is a UX affordance, not a security boundary.** The client is under
-  the user's control; the server is the only real authorisation point.
+  the user's control; the server is the only real authorisation point. The app has no sign-in
+  at all — the role switch in the UI says so on screen. Permissions are still enforced below
+  the UI, because hiding a button and refusing an action are different guarantees, but that is
+  correctness rather than security. See DECISION_LOG 11.2.
+- **The audit trail is a local activity log, not an accountability record.** It records a
+  *role*, not a person, because there is nobody to authenticate against. Anyone holding the
+  handset can change the role; the change is itself logged, which makes tampering visible and
+  not impossible. A real audit requirement is met by a server recording what it receives from
+  an authenticated principal, in storage the client cannot reach. See DECISION_LOG 11.5.
 - **One entity, one capture screen, one sync path.** Depth over breadth — a second entity adds
   volume without demonstrating anything new.
 - **Kotlin Multiplatform is not used.** The pure-Kotlin domain modules would make extraction
   feasible, but it is not claimed as shipped.
+
+## Data protection
+
+The records are children's names, ages, villages and body measurements, held on a handset in
+the field. India's Digital Personal Data Protection Act, 2023 and the DPDP Rules notified in
+November 2025 are the relevant regime, and they are phased in over the period following
+notification.
+
+**This project does not claim DPDP compliance**, and none of the following is legal advice —
+a real deployment needs counsel and a Data Protection Officer's review, not a README. What the
+build does do is follow the principles the Act is built on, where an Android client is the
+right place to follow them:
+
+- **Data minimisation.** The schema holds only fields a malnutrition screening actually uses.
+  There is no phone number, no address beyond a village name, no caregiver identifier, and no
+  device or advertising identifier. Record IDs are device-minted UUIDs carrying no meaning.
+- **Purpose limitation.** One entity, one purpose. Nothing here is collected for analytics, and
+  the app has no analytics SDK.
+- **Storage limitation, partially.** Drafts are cleared on save or discard. Records are not yet
+  subject to a retention window, which is an open item rather than a decision — retention
+  belongs with the server that would enforce it.
+- **Security safeguards.** Encryption at rest (SQLCipher, Keystore-wrapped key), backup and
+  device-transfer both disabled so the database cannot be extracted through those channels,
+  `FLAG_SECURE` on release builds so the recents thumbnail is not a screenshot of a child's
+  name, and no cleartext traffic permitted. DECISION_LOG Part 10 states what this protects
+  against and, more importantly, what it does not.
+- **Accountability.** An append-only audit trail, with its limits stated above and in
+  DECISION_LOG 11.5 rather than overstated.
+
+**The largest stated gap:** the data subjects are children under five, and DPDP places
+additional obligations on processing children's personal data — including verifiable parental
+consent. This app implements no consent capture, no notice, and no grievance mechanism. Those
+are not client-side features, and pretending otherwise would be the wrong kind of completeness.
 
 ## Licence
 

@@ -1,6 +1,7 @@
 package com.astracare.feature.patients
 
 import com.astracare.core.model.BeneficiaryId
+import com.astracare.core.model.UserRole
 import com.astracare.feature.patients.mvi.UiEffect
 import com.astracare.feature.patients.mvi.UiIntent
 import com.astracare.feature.patients.mvi.UiState
@@ -52,12 +53,26 @@ sealed interface BeneficiaryListIntent : UiIntent {
     data class RecordClicked(val id: BeneficiaryId) : BeneficiaryListIntent
 
     data object AddRecordClicked : BeneficiaryListIntent
+
+    /**
+     * The stand-in for signing in as someone else. Day 17.
+     *
+     * Carries the target role rather than being a `ToggleRole` with no payload, even though
+     * there are exactly two roles and a toggle would work today. A third role turns a toggle
+     * into a question with no answer, and the intent would have to change shape at the moment
+     * the permission model is already changing.
+     */
+    data class RoleSelected(val role: UserRole) : BeneficiaryListIntent
+
+    data object AuditTrailClicked : BeneficiaryListIntent
 }
 
-/** One-shot consequences. Both are navigation, which is the definition of an effect. */
+/** One-shot consequences. All three are navigation, which is the definition of an effect. */
 sealed interface BeneficiaryListEffect : UiEffect {
 
     data class OpenRecord(val id: BeneficiaryId) : BeneficiaryListEffect
 
     data object OpenCapture : BeneficiaryListEffect
+
+    data object OpenAuditTrail : BeneficiaryListEffect
 }

@@ -165,6 +165,9 @@ class CaptureViewModel @Inject constructor(
 
                 is SaveOutcome.Failed -> internalEffects.send(CaptureEffect.SaveFailed(outcome.error))
 
+                SaveOutcome.NotPermitted ->
+                    internalEffects.send(CaptureEffect.SaveNotPermitted)
+
                 // No effect. A rejected form is not an event that happened once — it is a
                 // condition the screen is now in, and the reducer has already put it in state
                 // where it will still be after a rotation.
@@ -213,6 +216,7 @@ class CaptureViewModel @Inject constructor(
             is Outcome.Failure -> when (val error = result.error) {
                 is SaveError.Invalid -> SaveOutcome.Rejected(CaptureErrors(violations = error.violations))
                 is SaveError.Storage -> SaveOutcome.Failed(error.error)
+                is SaveError.NotPermitted -> SaveOutcome.NotPermitted
             }
         }
 

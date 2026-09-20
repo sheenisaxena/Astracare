@@ -1625,6 +1625,219 @@ more than the change would have been.
 
 ---
 
+# Part 11 — Roles, and a trail that says only what it can prove
+
+Day 17. The plan's Flagship Checklist calls this the project's strongest edge — "health data +
+DPDP context". The risk in a day like this is building something that *looks* like access
+control and an audit log, and letting the resemblance do the arguing. Most of what follows is
+about the gap between what these mechanisms are and what they are usually taken to be.
+
+## 11.1 The permission matrix is a declaration, not a scattering of `if`s
+
+`RolePermissions.allows(role, capability)` is the only place that knows what a role may do. The
+UI asks it; the use cases ask it; nothing contains a copy.
+
+The alternative — `if (role == SUPERVISOR)` at each site — is shorter at every individual call
+and puts a second copy of the model in the UI layer. The two drift the first time a role is
+added, and they drift *quietly*, because a stale check still compiles and still does something.
+
+Both levels of the `when` are exhaustive with no `else`, so adding a `UserRole` or a
+`Capability` fails the build at the one file that must have an opinion. That is worth more here
+than anywhere else it has been used in this project: a permission that falls through to a
+default is a permission that defaults to *something*, and whichever default was picked is wrong
+half the time.
+
+`RolePermissionsTest` writes out all six cells, including the boring ones, plus a guard that
+fails when the matrix stops covering every combination. Six assertions against a rule whose
+failure mode is a supervisor quietly capturing records in a field worker's name.
+
+**Concept — a rule the compiler enforces the shape of, and a test enforces the content of.**
+
+## 11.2 Hiding a button and refusing an action are different guarantees
+
+`SaveBeneficiaryUseCase` checks `CAPTURE_RECORD` even though the capture screen is never
+offered to a role that lacks it. That looks redundant and is not, and the distinction is worth
+being precise about because it is the one an interviewer will push on.
+
+It is **not** defence in depth in the security sense. The role lives on the device, the device
+belongs to the user, and the user can change it — 4.3 said so on Day 4, before any of this
+existed. A check on the client cannot stop the client.
+
+What it is, is **correctness**. The button is absent, but a save can still arrive: from a
+restored back stack, from a process-death resurrection holding a stale screen, from a role
+switched in the moment between the form opening and the save completing. Without the check the
+app completes an action its own interface says is unavailable — a bug whatever the security
+story is, and one that would present as a mysterious record nobody remembers making.
+
+The line this draws is: **refuse actions below the UI; gate reads at the navigation.** The
+audit screen's ViewModel therefore has no permission check at all. A read nobody can reach is
+not something a client can secure anyway, and a ViewModel that refused would make the composable
+handle an error state it can never be in. A determined user reads the database, not the screen.
+
+`SaveError.NotPermitted` is a case rather than an exception for the same reason: "unreachable"
+is a claim about today's navigation.
+
+## 11.3 Append-only, in three layers, only one of which is real
+
+`audit_log` is append-only, and the guarantee is built three times:
+
+1. **`AuditRepository`** has no update and no delete. Code that goes through it cannot express
+   a change.
+2. **`AuditDao`** has no update and no delete. Same, one layer down.
+3. **Two SQLite triggers** make `UPDATE` and `DELETE` on the table `RAISE(ABORT, ...)`.
+
+The first two are documentation that happens to compile. Neither survives someone adding a
+method, and neither applies to code that does not go through them — a raw query, a future DAO,
+a session with a database inspector. Only the trigger makes it a property of the *file*.
+
+### The trap that would have made it a property of half the devices
+
+Room builds a fresh schema from the compiled `@Entity` classes and **runs no migration at all**
+on a new install. `@Entity` cannot declare a trigger. So a migration that creates the triggers
+gives them to every device that upgrades and to no device that installs clean.
+
+Worse, nothing would have reported it: Room validates tables, columns, indices and views
+against the compiled schema, and does not look at triggers. The app would have been append-only
+for upgraders and silently mutable for everyone else — the larger population, and the one
+nobody tests.
+
+Both paths therefore call the same `createAuditLogTriggers`: `MIGRATION_3_4` for upgrades, a
+`RoomDatabase.Callback.onCreate` in `DatabaseModule` for fresh databases.
+
+**Concept — when a guarantee lives outside the schema, find every path that creates the
+schema.**
+
+## 11.4 Ordered by rowid, displayed by timestamp
+
+`AuditDao.observeRecent` sorts by `id DESC`, not `at DESC`, and the entity's primary key is an
+autoincrementing rowid rather than a UUID.
+
+The timestamp comes from the device clock, which 2.6 has recorded as untrustworthy since Day 2
+and which 9.1 already refused to let decide conflicts. It is fine for *showing* a reader when
+something happened and wrong for establishing what happened first. Two entries written in the
+same millisecond, or either side of someone changing the system clock, still come back in the
+order they were written — because the rowid is the only monotonic thing in the app.
+
+The screen shows relative time ("5 minutes ago") for the same reason. An absolute timestamp
+looks authoritative; this one is not.
+
+## 11.5 The honest limits of an audit trail with no authentication
+
+This is the part that matters more than the code.
+
+An `AuditEntry` records a **role**, not a person, because this app has no authentication. So an
+entry says "this device, in supervisor mode, marked record X as conflicted" — useful for
+reconstructing what the app did, and **not** an accountability record. The role is switchable
+by whoever is holding the phone.
+
+The switch is itself logged (`ROLE_CHANGED`), attributed to the role being **left** rather than
+the one being taken — otherwise someone could become a supervisor and have the trail say a
+supervisor authorised it. That is the only mitigation available without a server, and it is
+partial: it makes tampering visible in the trail, it does not prevent it, and anyone who can
+change the role can also read the database the trail lives in.
+
+There is a fourth limit that follows from Day 16 rather than this day: the trail is inside the
+encrypted database, so it is as readable as the records are, to exactly the same people.
+
+The honest summary, which is what the README now says: **this is a local activity log, not an
+accountability record.** A real audit requirement is met by the server recording what it
+receives, from an authenticated principal, in storage the client cannot reach. Presenting this
+as more than it is would be worse than not having it, because someone would rely on it.
+
+**Concept — a control described accurately is worth more than a control described well.**
+
+## 11.6 A role switcher that admits what it is
+
+The UI carries a banner reading "Acting as Field worker" with a caption: *No sign-in yet — this
+switch stands in for it*. Always visible, for both roles.
+
+Three alternatives were weighed. A **hardcoded role** would have left the gating logic with one
+path anyone ever exercises — the day's actual subject, untested. A **role set once on first
+launch** models a real deployment more closely and makes the other role reachable only by
+clearing app data, which is unusable in a demo and quietly implies an authority the client does
+not have. The **visible switch** is the only one where the mechanism and its honesty are the
+same object: anyone can flip it, and that is precisely the point 4.3 makes, rendered where a
+health worker actually reads it rather than in a document they never will.
+
+The banner shows for both roles deliberately. Showing it only to supervisors would make the
+field-worker view look like the only view there is.
+
+Two smaller decisions in the same area. `RoleSelected` carries the target role rather than being
+a payload-free `ToggleRole`, because with a third role a toggle becomes a question with no
+answer — and it would have to change shape at the moment the permission model is already
+changing. And the UI's `permissions` `StateFlow` is seeded with the **least** privileged role,
+not the real one: `stateIn` needs a value before the database answers, and a permissive seed
+flashes a capture button at a supervisor for a frame, which on a slow first query is long
+enough to tap.
+
+## 11.7 What gets written down, and what deliberately does not
+
+Four actions: `RECORD_CREATED`, `RECORD_UPDATED`, `CONFLICT_DETECTED`, `ROLE_CHANGED`.
+
+Successful syncs are excluded. `SyncStatus` on the record already carries that, and duplicating
+it here would bury the four events above under a line per record per sync pass. An audit log
+that records everything is a log nobody reads, and a log nobody reads is not a control.
+
+Three exclusions are sharper than they look, and each has a test:
+
+- **A refused save writes nothing.** Validation failed, or the role could not capture — either
+  way no data changed, and the trail describes what happened to data.
+- **A storage failure writes nothing.** The record did not land.
+- **A conflict mark that the conditional write refused writes nothing.** The record moved
+  underneath the pull, so no conflict was recorded — and an entry anyway would describe an event
+  that never happened, which is worse than a missing one because it reads as true.
+
+That last one is the whole reason the audit call sits inside `.also { if (marked) }` rather than
+beside the write.
+
+Created-versus-updated comes from reading the row before writing it, which is free: the one-shot
+`findById` was added for the pull on Day 14.
+
+## 11.8 The audit write is not transactional with the save, and that is a choice
+
+The record lands first; the entry follows. A crash between them loses the entry and keeps the
+record.
+
+The reverse ordering would lose a health worker's data in order to keep a log of it, which is
+the wrong way round for this app. Making both atomic is possible — Room can wrap them in one
+transaction — and it would mean `SaveBeneficiaryUseCase` knowing the database exists, which is
+the layering the entire project is built to avoid.
+
+The deeper answer is that a client-side transaction would not buy what it appears to. A trail
+that can be dropped by a crash is already not an accountability record (11.5); making it
+atomic with the save would make it a *reliable* activity log and no more authoritative. Listed
+as an open item rather than solved with a transaction reaching through three layers.
+
+## 11.9 A third single-row table, and why not a column on an existing one
+
+`session` holds one row: which role the device is operating as. That is now three
+single-row tables — `capture_draft`, `sync_state`, `session` — and the obvious economy is to
+put the role on `sync_state`.
+
+`SyncStateEntity`'s own documentation rejects exactly that shortcut for exactly this reason, so
+taking it here would be inconsistent as well as wrong. The lifetimes differ: clearing every
+record and resetting the pull cursor is a coherent "start again" operation that must not change
+who the device thinks it is, and switching role must not disturb the cursor. Sharing a row
+couples them so that any future operation touching one has to reason about the other.
+
+`SharedPreferences` was the other candidate, and Day 16 did use it for the wrapped passphrase.
+That had a specific reason — it must be readable *before* the database can open — and nothing
+about a role needs that, so 6.3's argument applies unchanged.
+
+## 11.10 The trail has no foreign key to `beneficiaries`, deliberately
+
+`audit_log.record_id` names a beneficiary and is not declared as a foreign key.
+
+A trail that cascades away when the record it describes is deleted is not a trail — "record X
+was deleted" is precisely the entry that must survive the deletion. `ON DELETE SET NULL` keeps
+the row and destroys the only thing that made it meaningful.
+
+The cost is that `record_id` can name a record that no longer exists, which is correct: the
+history of a thing outlives the thing. The app cannot delete records today, so this is a
+constraint chosen before it is needed rather than discovered after.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
@@ -1661,3 +1874,9 @@ more than the change would have been.
 | `EncryptedDatabaseTest` is instrumented, so it is outside CI (4.5, 10.8) | The Keystore has no JVM implementation, so there is no Robolectric path either. The strongest test in the project does not run automatically | Days 18-20, with the migration and `ORDER BY` tests, if instrumented CI lands |
 | SQLCipher adds ~4MB of native library per ABI, unmeasured (10.1) | Accepted for the security it buys; no ABI split or app bundle configuration yet | With the benchmark work, alongside the cold-start numbers |
 | R8 is disabled — `optimization { enable = false }` in `app/build.gradle.kts` | Predates Day 16 and was not in its scope. A release build is therefore unshrunk and unobfuscated, and the modules' `keepRules` directories are unexercised | Its own day; enabling R8 blind on a Hilt + Room + Paging graph is not a ten-minute change |
+| The audit trail records a role, not a person (11.5) | There is no authentication, and the role is switchable by whoever holds the phone. `ROLE_CHANGED` makes tampering visible, not impossible | Server-side audit from an authenticated principal — needs a real backend (4.2) |
+| The audit write is not atomic with the save it describes (11.8) | A crash between them loses the entry and keeps the record, which is the right way round. A client-side transaction would make it reliable, not authoritative | With a server that records what it receives |
+| No migration test for 3→4, and the append-only triggers are untested (11.3) | The trigger path that a fresh install takes differs from the one an upgrade takes, and neither is covered. Room does not validate triggers, so nothing else would catch a regression | Days 18-20, with the other instrumented tests |
+| Client RBAC hides affordances and refuses actions; it secures nothing (4.3, 11.2) | Stated in the README and next to the code. The role is on the device and the device belongs to the user | Server-side authorisation on every request |
+| `audit_log` grows without bound and is never pruned | One line per save on a table nobody deletes from — and deletion is impossible by design (11.3), so pruning needs a deliberate mechanism rather than a `DELETE` | When a real deployment's volume is known; likely a server-side archive plus a local retention window |
+| DPDP: children's data attracts enhanced protections this app does not implement | Beneficiaries are children under five. Verifiable parental consent, and the consent notice and retention machinery around it, are absent | Out of scope for a portfolio build; named in the README rather than implied to be handled |

@@ -1,5 +1,6 @@
 package com.astracare.feature.patients
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,11 +39,13 @@ import com.astracare.core.designsystem.component.StatusTone
 import com.astracare.core.designsystem.theme.AstraCareTheme
 import com.astracare.core.designsystem.theme.Sizing
 import com.astracare.core.designsystem.theme.Spacing
+import com.astracare.core.domain.usecase.Permissions
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
 import com.astracare.core.model.Measurement
 import com.astracare.core.model.SyncStatus
 import com.astracare.core.model.Timestamp
+import com.astracare.core.model.UserRole
 import com.astracare.feature.patients.util.ObserveEffects
 import kotlinx.coroutines.flow.flowOf
 
@@ -57,22 +61,26 @@ import kotlinx.coroutines.flow.flowOf
 fun BeneficiaryListRoute(
     onAddRecord: () -> Unit,
     onOpenRecord: (BeneficiaryId) -> Unit,
+    onOpenAuditTrail: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: BeneficiaryListViewModel = hiltViewModel(),
 ) {
     val records = viewModel.records.collectAsLazyPagingItems()
     val syncSummary by viewModel.syncSummary.collectAsStateWithLifecycle()
+    val permissions by viewModel.permissions.collectAsStateWithLifecycle()
 
     ObserveEffects(viewModel.effects) { effect ->
         when (effect) {
             BeneficiaryListEffect.OpenCapture -> onAddRecord()
             is BeneficiaryListEffect.OpenRecord -> onOpenRecord(effect.id)
+            BeneficiaryListEffect.OpenAuditTrail -> onOpenAuditTrail()
         }
     }
 
     BeneficiaryListScreen(
         records = records,
         syncSummary = syncSummary,
+        permissions = permissions,
         onIntent = viewModel::dispatch,
         modifier = modifier,
     )
@@ -83,6 +91,7 @@ fun BeneficiaryListRoute(
 internal fun BeneficiaryListScreen(
     records: LazyPagingItems<Beneficiary>,
     syncSummary: SyncSummaryUiState,
+    permissions: Permissions,
     onIntent: (BeneficiaryListIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -91,15 +100,29 @@ internal fun BeneficiaryListScreen(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.list_title)) },
-                actions = { SyncSummaryChip(syncSummary) },
+                actions = {
+                    // Both gates ask the permission, never the role. `if (role == SUPERVISOR)`
+                    // would put a second copy of the permission matrix in the UI layer, and the
+                    // two would drift the first time a role is added. See RolePermissions.
+                    if (permissions.canViewAuditTrail) {
+                        TextButton(
+                            onClick = { onIntent(BeneficiaryListIntent.AuditTrailClicked) },
+                        ) {
+                            Text(stringResource(R.string.list_action_audit))
+                        }
+                    }
+                    SyncSummaryChip(syncSummary)
+                },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { onIntent(BeneficiaryListIntent.AddRecordClicked) },
-                text = { Text(stringResource(R.string.list_action_add)) },
-                icon = {},
-            )
+            if (permissions.canCaptureRecord) {
+                ExtendedFloatingActionButton(
+                    onClick = { onIntent(BeneficiaryListIntent.AddRecordClicked) },
+                    text = { Text(stringResource(R.string.list_action_add)) },
+                    icon = {},
+                )
+            }
         },
     ) { innerPadding ->
         // Three cases, read off Paging's own load state rather than a hand-maintained enum.
@@ -108,20 +131,79 @@ internal fun BeneficiaryListScreen(
         val isRefreshing = records.loadState.refresh is LoadState.Loading
         val isEmpty = !isRefreshing && records.itemCount == 0
 
-        when {
-            isRefreshing -> CentredBox(Modifier.padding(innerPadding)) {
-                CircularProgressIndicator()
+        Column(Modifier.padding(innerPadding)) {
+            RoleBanner(role = permissions.role, onIntent = onIntent)
+
+            when {
+                isRefreshing -> CentredBox(Modifier) { CircularProgressIndicator() }
+
+                isEmpty -> CentredBox(Modifier) { EmptyState() }
+
+                else -> RecordList(records = records, onIntent = onIntent)
             }
-
-            isEmpty -> CentredBox(Modifier.padding(innerPadding)) { EmptyState() }
-
-            else -> RecordList(
-                records = records,
-                onIntent = onIntent,
-                contentPadding = innerPadding,
-            )
         }
     }
+}
+
+/**
+ * Says which role the app is currently behaving as, and that this is not a sign-in.
+ *
+ * A control that looked like an account switcher would imply an authority the app does not
+ * have. The caption is doing real work: `DECISION_LOG 4.3` says client-side RBAC is a UX
+ * affordance rather than a security boundary, and this is that sentence in the one place a
+ * health worker will actually read it.
+ *
+ * Always visible, for both roles. Showing it only to supervisors would make the field-worker
+ * view look like the only view there is, which is exactly the impression a demo should not
+ * leave.
+ */
+@Composable
+private fun RoleBanner(
+    role: UserRole,
+    onIntent: (BeneficiaryListIntent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // With two roles the "other" one is unambiguous. The intent still carries the target role
+    // rather than being a toggle, so a third role changes this line and nothing downstream.
+    val other = if (role == UserRole.FIELD_WORKER) UserRole.SUPERVISOR else UserRole.FIELD_WORKER
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Gutter),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.list_role_acting_as, stringResource(role.labelRes())),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(R.string.list_role_caption),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
+        TextButton(onClick = { onIntent(BeneficiaryListIntent.RoleSelected(other)) }) {
+            Text(stringResource(R.string.list_role_switch))
+        }
+    }
+    HorizontalDivider()
+}
+
+/**
+ * The display name for a role.
+ *
+ * A string resource, not the enum's `name`. `FIELD_WORKER` is an identifier; "Field worker" is
+ * a word, and this app has already committed to a Hindi translation — see the header of
+ * `strings.xml`. Exhaustive `when`, so a new role fails the build here rather than rendering
+ * as a constant name on screen.
+ */
+@StringRes
+internal fun UserRole.labelRes(): Int = when (this) {
+    UserRole.FIELD_WORKER -> R.string.role_field_worker
+    UserRole.SUPERVISOR -> R.string.role_supervisor
 }
 
 /**
@@ -151,12 +233,12 @@ private fun SyncSummaryChip(summary: SyncSummaryUiState) {
 private fun RecordList(
     records: LazyPagingItems<Beneficiary>,
     onIntent: (BeneficiaryListIntent) -> Unit,
-    contentPadding: PaddingValues,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
+        // The Scaffold's inset is applied by the enclosing Column, which also holds the role
+        // banner, so only the tail padding is this list's own business now.
         contentPadding = PaddingValues(
-            top = contentPadding.calculateTopPadding(),
             // Clears the floating action button, which would otherwise sit on top of the
             // last record — the one just captured, and the one most likely to be tapped.
             bottom = Spacing.ScrollTail,
@@ -280,6 +362,9 @@ internal fun BeneficiaryListContentPreview() {
         BeneficiaryListScreen(
             records = records,
             syncSummary = SyncSummaryUiState(awaitingSync = 2),
+            // The two previews deliberately use different roles, so the gated affordances —
+            // the capture button and the audit action — are both covered by a screenshot.
+            permissions = Permissions(UserRole.FIELD_WORKER),
             onIntent = {},
         )
     }
@@ -294,6 +379,7 @@ internal fun BeneficiaryListEmptyPreview() {
         BeneficiaryListScreen(
             records = records,
             syncSummary = SyncSummaryUiState.Unknown,
+            permissions = Permissions(UserRole.SUPERVISOR),
             onIntent = {},
         )
     }

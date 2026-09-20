@@ -60,4 +60,30 @@
     <string name="sync_conflicted">Needs review</string>
     <string name="sync_conflicted_description">The server has a newer version; someone must choose which to keep</string>
 
+    <!-- Roles and the audit trail (Day 17) -->
+    <string name="role_field_worker">Field worker</string>
+    <string name="role_supervisor">Supervisor</string>
+    <string name="list_role_acting_as">Acting as %1$s</string>
+    <!--
+      Says out loud that this is not a sign-in. A role control that looked like an account
+      would imply an authority the app does not have; DECISION_LOG 4.3 and 11.2 make the same
+      point in prose, and this is the version a health worker actually sees.
+    -->
+    <string name="list_role_caption">No sign-in yet — this switch stands in for it</string>
+    <string name="list_role_switch">Switch</string>
+    <string name="list_role_switch_description">Switch to the %1$s role</string>
+    <string name="list_action_audit">Audit</string>
+    <string name="capture_save_not_permitted">The supervisor role cannot save records. Switch to field worker first.</string>
+
+    <string name="audit_title">Audit trail</string>
+    <string name="audit_back">Back</string>
+    <string name="audit_empty_title">Nothing recorded yet</string>
+    <string name="audit_empty_body">Saved records, detected conflicts and role changes appear here.</string>
+    <string name="audit_action_record_created">Record created</string>
+    <string name="audit_action_record_updated">Record updated</string>
+    <string name="audit_action_conflict_detected">Conflict detected</string>
+    <string name="audit_action_role_changed">Role changed</string>
+    <string name="audit_subject_record">Record %1$s</string>
+    <string name="audit_subject_device">This device</string>
+    <string name="audit_by_actor">by %1$s</string>
 </resources>

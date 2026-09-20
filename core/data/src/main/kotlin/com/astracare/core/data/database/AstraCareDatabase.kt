@@ -2,11 +2,15 @@ package com.astracare.core.data.database
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import com.astracare.core.data.database.dao.AuditDao
 import com.astracare.core.data.database.dao.BeneficiaryDao
 import com.astracare.core.data.database.dao.DraftDao
+import com.astracare.core.data.database.dao.SessionDao
 import com.astracare.core.data.database.dao.SyncStateDao
+import com.astracare.core.data.database.entity.AuditEntryEntity
 import com.astracare.core.data.database.entity.BeneficiaryEntity
 import com.astracare.core.data.database.entity.DraftEntity
+import com.astracare.core.data.database.entity.SessionEntity
 import com.astracare.core.data.database.entity.SyncStateEntity
 
 /**
@@ -18,13 +22,21 @@ import com.astracare.core.data.database.entity.SyncStateEntity
  * exported schema there is nothing to migrate *from* in a test, and migrations get verified by
  * shipping them — which on this app would mean losing field data that was never synced.
  *
- * ## Three tables, three very different jobs
+ * ## Five tables, five very different jobs
  *
  * [BeneficiaryEntity] holds committed records that the sync engine will push. [DraftEntity]
  * holds one unfinished capture that must never be pushed anywhere. [SyncStateEntity] holds the
- * sync engine's own bookkeeping and describes no beneficiary at all. They share a database
- * because they share a lifetime and a backup policy — not because they are the same kind of
- * thing. Nothing joins them, and each DAO sees only its own table.
+ * sync engine's own bookkeeping and describes no beneficiary at all. [AuditEntryEntity] holds
+ * an append-only history that must outlive the rows it describes, and [SessionEntity] holds
+ * which role the device is operating as. They share a database because they share a lifetime
+ * and a backup policy — not because they are the same kind of thing. Nothing joins them, and
+ * each DAO sees only its own table.
+ *
+ * `audit_log` is the one with a rule the schema cannot express: it is append-only, enforced
+ * by SQLite triggers rather than by the entity. Those triggers are installed from two places
+ * — the migration for upgrades and a `RoomDatabase.Callback` for fresh installs — because
+ * Room builds a new schema from these annotations without running a migration, and `@Entity`
+ * cannot declare a trigger. See `AuditLogTriggers`.
  *
  * That last point is load-bearing for [SyncStateEntity]: the pull cursor must be backed up and
  * restored together with the records it describes. A cursor that survives while the rows do not
@@ -32,7 +44,13 @@ import com.astracare.core.data.database.entity.SyncStateEntity
  * resends it.
  */
 @Database(
-    entities = [BeneficiaryEntity::class, DraftEntity::class, SyncStateEntity::class],
+    entities = [
+        BeneficiaryEntity::class,
+        DraftEntity::class,
+        SyncStateEntity::class,
+        AuditEntryEntity::class,
+        SessionEntity::class,
+    ],
     version = DATABASE_VERSION,
     exportSchema = true,
 )
@@ -40,18 +58,20 @@ abstract class AstraCareDatabase : RoomDatabase() {
     abstract fun beneficiaryDao(): BeneficiaryDao
     abstract fun draftDao(): DraftDao
     abstract fun syncStateDao(): SyncStateDao
+    abstract fun auditDao(): AuditDao
+    abstract fun sessionDao(): SessionDao
 }
 
 /**
  * Named constant rather than a literal in the annotation: it is referenced by migration tests,
  * and a bare `version = 2` gives nothing to point at.
  *
- * Bumped to 2 on Day 11 adding `capture_draft`, and to 3 on Day 14 adding `sync_state`. Every
- * bump needs a matching entry in
+ * Bumped to 2 on Day 11 adding `capture_draft`, to 3 on Day 14 adding `sync_state`, and to 4
+ * on Day 17 adding `audit_log` and `session`. Every bump needs a matching entry in
  * `ALL_MIGRATIONS` — there is no `fallbackToDestructiveMigration` to catch a miss, which is
  * the intent: the app would rather fail loudly on a developer's device than silently delete a
  * health worker's unsynced records.
  */
-const val DATABASE_VERSION = 3
+const val DATABASE_VERSION = 4
 
 internal const val DATABASE_NAME = "astracare.db"

@@ -4,15 +4,23 @@ import androidx.paging.PagingData
 import app.cash.turbine.ReceiveTurbine
 import app.cash.turbine.test
 import com.astracare.core.common.Outcome
+import com.astracare.core.common.time.TimeProvider
+import com.astracare.core.domain.repository.AuditRepository
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.RepositoryError
+import com.astracare.core.domain.repository.SessionRepository
 import com.astracare.core.domain.usecase.ObserveAwaitingSyncCountUseCase
 import com.astracare.core.domain.usecase.ObserveBeneficiariesUseCase
+import com.astracare.core.domain.usecase.ObservePermissionsUseCase
+import com.astracare.core.domain.usecase.SwitchRoleUseCase
+import com.astracare.core.model.AuditAction
+import com.astracare.core.model.AuditEntry
 import com.astracare.core.model.Beneficiary
 import com.astracare.core.model.BeneficiaryId
 import com.astracare.core.model.Measurement
 import com.astracare.core.model.SyncStatus
 import com.astracare.core.model.Timestamp
+import com.astracare.core.model.UserRole
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -54,6 +62,8 @@ import org.junit.Test
 class BeneficiaryListViewModelTest {
 
     private val repository = FakePagedBeneficiaryRepository()
+    private val session = SwitchableSession()
+    private val audit = SilentAuditRepository()
 
     private lateinit var viewModel: BeneficiaryListViewModel
 
@@ -63,6 +73,8 @@ class BeneficiaryListViewModelTest {
         viewModel = BeneficiaryListViewModel(
             observeBeneficiaries = ObserveBeneficiariesUseCase(repository),
             observeAwaitingSyncCount = ObserveAwaitingSyncCountUseCase(repository),
+            observePermissions = ObservePermissionsUseCase(session),
+            switchRole = SwitchRoleUseCase(session, audit, TimeProvider { Timestamp(0L) }),
         )
     }
 
@@ -148,6 +160,41 @@ class BeneficiaryListViewModelTest {
             viewModel.dispatch(BeneficiaryListIntent.AddRecordClicked)
 
             assertEquals(BeneficiaryListEffect.OpenCapture, awaitItem())
+        }
+    }
+
+    @Test
+    fun `the screen starts on the least privileged role`() = runTest {
+        // Before the database answers, `permissions` must report the role that can do least.
+        // Seeding it with anything else flashes a capture button at a supervisor for a frame —
+        // long enough to see, and on a slow first query long enough to tap.
+        assertEquals(UserRole.Default, viewModel.permissions.value.role)
+        assertTrue(viewModel.permissions.value.canCaptureRecord)
+        assertFalse(viewModel.permissions.value.canViewAuditTrail)
+    }
+
+    @Test
+    fun `switching role re-gates the screen`() = runTest {
+        viewModel.permissions.test {
+            awaitItem()
+
+            viewModel.dispatch(BeneficiaryListIntent.RoleSelected(UserRole.SUPERVISOR))
+
+            // The gate follows the repository rather than being set by the intent, so nothing
+            // has to remember to refresh — and a role changed by the sync engine or a future
+            // server push would move the UI the same way.
+            val supervisor = awaitItem()
+            assertFalse(supervisor.canCaptureRecord)
+            assertTrue(supervisor.canViewAuditTrail)
+        }
+    }
+
+    @Test
+    fun `asking for the audit trail is navigation, not a state change`() = runTest {
+        viewModel.effects.test {
+            viewModel.dispatch(BeneficiaryListIntent.AuditTrailClicked)
+
+            assertEquals(BeneficiaryListEffect.OpenAuditTrail, awaitItem())
         }
     }
 
@@ -237,4 +284,25 @@ private class FakePagedBeneficiaryRepository : BeneficiaryRepository {
         }
         return mayWrite
     }
+}
+
+private class SwitchableSession : SessionRepository {
+    private val role = MutableStateFlow(UserRole.Default)
+
+    override fun observeActiveRole(): Flow<UserRole> = role
+    override suspend fun activeRole(): UserRole = role.value
+    override suspend fun setActiveRole(role: UserRole) {
+        this.role.value = role
+    }
+}
+
+private class SilentAuditRepository : AuditRepository {
+    override suspend fun append(
+        actor: UserRole,
+        action: AuditAction,
+        recordId: BeneficiaryId?,
+        at: Timestamp,
+    ) = Unit
+
+    override fun observeRecent(limit: Int): Flow<List<AuditEntry>> = MutableStateFlow(emptyList())
 }

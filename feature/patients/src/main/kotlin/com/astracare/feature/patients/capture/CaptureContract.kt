@@ -161,6 +161,17 @@ sealed interface CaptureEffect : UiEffect {
      */
     data class SaveFailed(val error: RepositoryError) : CaptureEffect
 
+    /**
+     * The active role may not capture records. Day 17.
+     *
+     * Unreachable through the UI, which does not offer this screen to a role that cannot use
+     * it — and modelled anyway, because "unreachable" is a claim about today's navigation.
+     * A restored back stack, a process-death resurrection holding a stale screen, or a role
+     * switched while the form was open all deliver a save the permission refuses, and the
+     * alternative to a case here is a form that appears to save and silently does not.
+     */
+    data object SaveNotPermitted : CaptureEffect
+
     data object Discarded : CaptureEffect
 }
 
@@ -182,4 +193,12 @@ internal sealed interface SaveOutcome {
 
     /** The record was valid but the local write failed. */
     data class Failed(val error: RepositoryError) : SaveOutcome
+
+    /**
+     * The active role is not allowed to capture. Distinct from [Failed] because nothing went
+     * wrong: the app refused, correctly, and retrying will refuse again. Collapsing it into a
+     * storage failure would tell the health worker to try again at the one moment that cannot
+     * help.
+     */
+    data object NotPermitted : SaveOutcome
 }

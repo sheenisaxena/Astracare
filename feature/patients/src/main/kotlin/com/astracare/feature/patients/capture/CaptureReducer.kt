@@ -56,6 +56,11 @@ internal fun CaptureUiState.reduce(outcome: SaveOutcome): CaptureUiState = when 
     // worker's fault; clearing the form would make them re-enter a visit they already
     // recorded, on a handset that just demonstrated it cannot be trusted to hold data.
     is SaveOutcome.Failed -> copy(isSaving = false)
+
+    // Same treatment as a storage failure: stop the spinner, keep every typed character.
+    // The refusal is reported as an effect, and clearing the form would throw away work
+    // the health worker may be able to save once the role is switched back.
+    SaveOutcome.NotPermitted -> copy(isSaving = false)
 }
 
 private fun CaptureUiState.withField(field: CaptureField, value: String): CaptureUiState =

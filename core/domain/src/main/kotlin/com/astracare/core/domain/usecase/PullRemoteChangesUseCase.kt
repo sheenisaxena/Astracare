@@ -1,11 +1,15 @@
 package com.astracare.core.domain.usecase
 
+import com.astracare.core.common.time.TimeProvider
 import com.astracare.core.domain.remote.PullOutcome
 import com.astracare.core.domain.remote.RemoteBeneficiarySource
+import com.astracare.core.domain.repository.AuditRepository
 import com.astracare.core.domain.repository.BeneficiaryRepository
+import com.astracare.core.domain.repository.SessionRepository
 import com.astracare.core.domain.repository.SyncStateRepository
 import com.astracare.core.domain.sync.ConflictResolution
 import com.astracare.core.domain.sync.ConflictResolver
+import com.astracare.core.model.AuditAction
 import com.astracare.core.model.SyncStatus
 import javax.inject.Inject
 
@@ -44,6 +48,9 @@ class PullRemoteChangesUseCase @Inject constructor(
     private val repository: BeneficiaryRepository,
     private val syncState: SyncStateRepository,
     private val remote: RemoteBeneficiarySource,
+    private val session: SessionRepository,
+    private val audit: AuditRepository,
+    private val timeProvider: TimeProvider,
 ) {
 
     suspend operator fun invoke(): PullSummary {
@@ -76,12 +83,28 @@ class PullRemoteChangesUseCase @Inject constructor(
             ),
         )
 
+        // The one event in the whole sync engine that a person has to act on, so it is the
+        // one the audit trail most needs. Written only when the mark actually applied: a
+        // refused write means the record moved and no conflict was recorded, and logging one
+        // anyway would put an event in the trail that never happened.
         is ConflictResolution.FlagConflict -> Change(
             conflicted = repository.updateSyncStatus(
                 id = resolution.id,
                 unchangedSince = resolution.localUpdatedAt,
                 status = SyncStatus.CONFLICTED,
-            ),
+            ).also { marked ->
+                if (marked) {
+                    audit.append(
+                        // The role the device is in when the pass runs, which for a background
+                        // worker is whatever was last selected. Honest rather than useful: no
+                        // person authorised this, and the trail should not imply one did.
+                        actor = session.activeRole(),
+                        action = AuditAction.CONFLICT_DETECTED,
+                        recordId = resolution.id,
+                        at = timeProvider.now(),
+                    )
+                }
+            },
         )
 
         ConflictResolution.KeepLocal -> Change()
