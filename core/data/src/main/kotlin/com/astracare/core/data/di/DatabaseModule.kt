@@ -2,6 +2,7 @@ package com.astracare.core.data.di
 
 import android.content.Context
 import androidx.room.Room
+import com.astracare.core.data.crypto.DatabasePassphrase
 import com.astracare.core.data.database.AstraCareDatabase
 import com.astracare.core.data.database.DATABASE_NAME
 import com.astracare.core.data.database.dao.BeneficiaryDao
@@ -13,6 +14,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import javax.inject.Singleton
 
 /**
@@ -33,16 +35,44 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
 
+    /**
+     * ## The database is encrypted, and nothing above this module knows that
+     *
+     * `openHelperFactory` swaps the SQLite implementation Room writes through. Every DAO,
+     * every query, every migration is unchanged — which is the whole reason the encryption
+     * decision could be deferred to Day 16 and still be one file's worth of change. It also
+     * means removing it is one line.
+     *
+     * Three details that are easy to get wrong:
+     *
+     *  - **`System.loadLibrary` first.** SQLCipher is a native library and nothing in it works
+     *    until the `.so` is in the process. Missing it produces an `UnsatisfiedLinkError` from
+     *    inside Room, on the first query rather than here.
+     *  - **The modern artifact.** `net.zetetic:sqlcipher-android` uses
+     *    `System.loadLibrary("sqlcipher")`. The older `net.zetetic:android-database-sqlcipher`
+     *    — still what most tutorials show — wants `SQLiteDatabase.loadLibs(context)` instead,
+     *    and mixing the two coordinates is a duplicate-native-symbol crash.
+     *  - **The passphrase is not zeroed.** [SupportOpenHelperFactory] keeps the array it is
+     *    given and offers no way to clear it; the `clearPassphrase` flag belonged to the older
+     *    artifact. Zeroing it here is not possible either, because the factory opens the
+     *    database lazily and may reopen it later. So the passphrase lives in heap memory for
+     *    the life of the process, which is a real limit on what this protects against and is
+     *    written down as one rather than glossed. See DECISION_LOG 10.5.
+     */
     @Provides
     @Singleton
     fun providesDatabase(
         @ApplicationContext context: Context,
+        passphrase: DatabasePassphrase,
     ): AstraCareDatabase {
+        System.loadLibrary(SQLCIPHER_LIBRARY)
+
         val builder = Room.databaseBuilder(
             context = context,
             klass = AstraCareDatabase::class.java,
             name = DATABASE_NAME,
-        )
+        ).openHelperFactory(SupportOpenHelperFactory(passphrase.get()))
+
         // Registered from a single list in the migration package, so adding a migration is
         // one edit there rather than two. A migration that exists but is never registered is
         // the classic way a correct migration still crashes on upgrade.
@@ -71,4 +101,7 @@ object DatabaseModule {
     @Provides
     fun providesSyncStateDao(database: AstraCareDatabase): SyncStateDao =
         database.syncStateDao()
+
+    /** The native library name, which is not the artifact name and not the class name. */
+    private const val SQLCIPHER_LIBRARY = "sqlcipher"
 }

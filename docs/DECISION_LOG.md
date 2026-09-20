@@ -1374,6 +1374,257 @@ what to put in the new table (9.5) — which no schema diff can reason about at 
 
 ---
 
+# Part 10 — Encryption at rest, and what it does not buy
+
+Day 16. The records this app holds are children's names, ages, villages and body measurements,
+sitting on a handset that gets carried around a district and occasionally lost. Encrypting them
+is the easy part. Being precise about what that does and does not achieve is the part worth
+writing down.
+
+## 10.1 Whole-database encryption, not the two columns named in PII_FIELDS
+
+`Beneficiary.PII_FIELDS` has existed since Day 7 with a comment saying it was there so the
+encryption work would have one definition to point at. Day 16 did not use it, and the reason is
+worth recording rather than leaving as an unexplained loose end.
+
+Field-level encryption of `name` and `village` was the plan. It is cheap — no native
+dependency, no measurable cost — and it protects exactly two columns. What it leaves in
+plaintext on disk is a child's age, weight, height, mid-upper-arm circumference, the village
+*index*, the capture timestamp and the entire `capture_draft` row, which holds the same PII
+mid-keystroke. For a malnutrition screening record, "everything except the name" is not
+meaningfully de-identified: a row saying a three-year-old in a known catchment area has a MUAC
+of 108mm is a medical record about an identifiable child.
+
+SQLCipher encrypts the file: pages, indexes, the write-ahead log, temp storage and the header.
+Three costs, all accepted:
+
+- **~4MB of native library per ABI**, bundled in the AAR for `armeabi-v7a`, `arm64-v8a`, `x86`
+  and `x86_64`. Real on a budget handset, and the reason ABI splits exist — noted as an open
+  item, not solved today.
+- **A few percent on reads.** Irrelevant at one health worker's data volume, and the paging
+  work on Day 12 means the app reads thirty rows at a time rather than the table.
+- **A native dependency in the deployment.** The honest version of the trade.
+
+What tipped it was a fourth consideration that is not about security at all: field-level
+encryption is a one-way door for queries. Encrypted columns cannot be sorted, matched with
+`LIKE`, or indexed usefully. The history screen does not search by name *today*, so the cost
+looks like zero — right up to the first "can I find a child by name?", at which point the
+answer is a schema migration and a re-encryption of every row. SQLCipher leaves every future
+query available.
+
+`PII_FIELDS` stays, unused by the crypto, because it is still the single place that answers
+"what in this model is sensitive?" — which the logging review below needed and any future
+export or redaction feature will need again.
+
+## 10.2 Jetpack Security is deprecated, and the version catalog knew about it first
+
+The catalog carried `androidx-security-crypto = "1.1.0"` from the planning phase. Every API in
+that library — `EncryptedSharedPreferences`, `EncryptedFile`, `MasterKey` — was **deprecated in
+June 2025** (1.1.0-beta01), in favour of platform APIs and direct use of the Android Keystore.
+The stable 1.1.0 released a month later, deprecated on arrival.
+
+It is still the first answer to every "how do I encrypt data on Android" search, and it was
+still sitting in this project's catalog waiting to be used. So the entry was removed rather
+than left unused, with a comment saying why — an unused dependency is an invitation, and the
+next person to open the catalog looking for the encryption story should not find a deprecated
+library pre-approved.
+
+`DatabasePassphrase` therefore talks to `AndroidKeyStore` and `javax.crypto` directly. That is
+about forty lines instead of five, and the forty lines are the ones that were always doing the
+work; the library was a wrapper.
+
+**Concept — a dependency chosen during planning is a decision made with the information of the
+planning date.** Re-checking it on the day it is first used cost one search.
+
+## 10.3 A passphrase the Keystore wraps but cannot hold
+
+SQLCipher needs a passphrase it can read. The Keystore's entire value is that its keys cannot
+be read — they live in the TEE and only ever act on data handed to them. The requirements are
+directly opposed, so the passphrase cannot *be* a Keystore key. One level of indirection
+resolves it:
+
+1. 32 random bytes from `SecureRandom`, once. That is the passphrase.
+2. Wrapped with an AES-GCM key that is generated in, and never leaves, the Keystore.
+3. The wrapped result stored in ordinary `SharedPreferences`.
+
+Plain preferences, deliberately: what is written there is already ciphertext, and wrapping it
+again with a key from the same Keystore adds a step without adding a secret.
+
+Two details in that code are load-bearing and neither is obvious.
+
+**`commit()`, not `apply()`.** `apply()` writes asynchronously. A process death in the window
+between the database being created with a passphrase and that passphrase becoming durable would
+leave a database encrypted with bytes nothing has recorded — permanently unreadable, on the
+first ever launch. Blocking the caller once at first launch is the correct price.
+
+**Key missing, wrapped passphrase present, is fatal and says so.** If the Keystore key is gone
+while the stored blob remains, no code anywhere can decrypt that database. The tempting
+behaviour is to mint a fresh passphrase; the result is an "unable to open database file" error
+that sends the next person to look at the database. It throws instead, naming the actual cause.
+
+## 10.4 setUnlockedDeviceRequired, and the worker it would have broken
+
+The wrapping key is created with `setUnlockedDeviceRequired(true)` on API 28+, so the database
+cannot be opened while the handset is locked. That is the protection being bought, and it is
+not free: **WorkManager can start a sync pass on a locked device, in a process that was not
+already running.**
+
+The first version of that failure was bad. Resolving `PushPendingRecordsUseCase` pulls the
+repository, which pulls the DAO, which opens the database — all of it during
+`SyncBeneficiariesWorker`'s *construction*. A throw there surfaces as WorkManager's
+"Could not instantiate SyncBeneficiariesWorker", which reads like a Hilt wiring bug, says
+nothing about the phone being locked, and cannot become a retry because `doWork` was never
+reached.
+
+The fix is to inject `dagger.Lazy<...>` and resolve inside `doWork`, where the failure is a
+catchable `LocalStoreUnavailableException` and a correct `Result.retry()`. The general rule:
+
+**A worker whose dependencies can fail for transient, expected reasons must not resolve them in
+its constructor.**
+
+Below API 28 the flag does not exist. minSdk here is 24, so that is a real population, and the
+honest statement is that those devices get Keystore-bound encryption without the locked-device
+guarantee — not that they are unprotected.
+
+`setIsStrongBoxBacked` was considered and rejected: some devices advertise StrongBox and then
+throw at generation or first use, so it needs a fallback path that would have to be exercised
+on hardware this project cannot reach. Untested fallback code in the one place that can make
+every record unreadable is the wrong trade.
+
+## 10.5 What this actually protects against
+
+The part most write-ups skip. Android already encrypts app storage — file-based encryption has
+been mandatory since Android 10, and the app's default storage is credential-encrypted, so it
+is unreadable before the first unlock after boot. **SQLCipher does not add that; the platform
+already had it.** Claiming otherwise would be the most comfortable sentence in this document
+and it would be false.
+
+What SQLCipher does add, on top of FBE:
+
+- **Anything that reads the file while the platform considers it available.** A rooted device,
+  an unlocked bootloader, a forensic image taken after first unlock, a backup that should not
+  have run, another app exploiting a path-traversal or a wrongly-exported provider.
+- **A second, independent control.** FBE is one key hierarchy managed by the platform. This is
+  a second one, under the app's own control, and a break in one does not hand over the data.
+- **Protection while the device is locked but running**, via `setUnlockedDeviceRequired` —
+  which is a window FBE does not cover, because credential-encrypted storage stays unlocked
+  after first unlock until reboot.
+
+What it does not protect against, stated plainly:
+
+- **An attacker with the unlock credential.** They are the user as far as every layer here is
+  concerned.
+- **Malware with root while the app is running.** The database is open and the passphrase is in
+  heap memory.
+- **The passphrase's lifetime in memory.** `SupportOpenHelperFactory` in
+  `net.zetetic:sqlcipher-android` keeps the array it is given and offers no way to clear it —
+  the `clearPassphrase` flag belonged to the older `android-database-sqlcipher` artifact.
+  Zeroing it from outside is impossible too, because the factory opens the database lazily and
+  may reopen it. So the passphrase is in heap for the life of the process. This was checked in
+  the library source rather than assumed from its documentation.
+- **Anything in transit.** There is no backend (4.2). The network security config below is
+  written for a server that does not exist yet.
+- **A device with no lock screen.** `setUnlockedDeviceRequired` on a device with no credential
+  set means "always unlocked". It degrades silently, which is worth knowing.
+
+**Concept — a security control is only assessable against a stated threat model.** "The
+database is encrypted" is marketing. The list above is a claim someone can check.
+
+## 10.6 Backup is off, and would not have worked anyway
+
+`android:allowBackup="false"`, and both rules files filled in rather than left as the project
+template's commented-out samples.
+
+The primary reason is that Auto Backup would copy a health worker's beneficiary records —
+including ones that have never reached a server — to a consumer cloud account, through a
+transport outside this app's threat model. Encrypting the file on disk and then shipping it off
+the device undoes most of the point.
+
+The second reason is that it would not work. The passphrase is wrapped by a Keystore key that
+cannot be exported or restored to another device, so a restored database would be an unopenable
+blob and a restored `SharedPreferences` would hold ciphertext with no key. The failure would
+present as a corrupt database on a new phone.
+
+Both rules files matter because they are different channels: `allowBackup` governs cloud
+backup, and Android 12+ **device-to-device transfer** has its own opt-out that `allowBackup`
+does not cover. Turning off one and not the other is the easy half-measure.
+
+## 10.7 FLAG_SECURE, and why debuggable builds are exempt
+
+Encrypting the database does nothing about the screenshot the system takes when the app is
+backgrounded. The recents thumbnail is a picture of whatever was on screen — on the capture
+form, a child's name, age and village — stored outside the app's own storage.
+`FLAG_SECURE` covers screenshots, screen recording, casting and that thumbnail in one flag.
+
+Set on the activity rather than per screen: both screens show beneficiary records, so scoping
+it to the capture form would protect the shorter exposure and leave the longer one. It also
+means a third screen is protected by default rather than by remembering, which is the safe
+direction for a flag whose absence is invisible.
+
+Debuggable builds are exempt, because FLAG_SECURE blocks the developer's own screenshots too —
+including the ones the README needs and any future screenshot test. The exemption keys off
+`ApplicationInfo.FLAG_DEBUGGABLE` rather than a `BuildConfig.DEBUG` constant, so it is tied to
+the property that actually matters: a debuggable build has already surrendered far more than
+its screenshots, and a non-debuggable one is protected whichever build type produced it.
+
+## 10.8 A test that reads the file, and the control that makes it mean something
+
+`EncryptedDatabaseTest` writes a record through the real stack, closes the database, and reads
+the raw bytes off disk with no SQLite involved. It asserts the name is absent, the village is
+absent, and the file does not begin with `SQLite format 3` — SQLCipher encrypts the header, so
+an encrypted file does not even announce itself as a database.
+
+Every cheaper test of this is a test of the configuration rather than the result: that
+`openHelperFactory` was called, that the passphrase was non-empty, that the SQLCipher class is
+on the classpath. All of them pass on a build where the factory is wired up and silently not
+used — which is the one bug worth catching, because a quietly-plaintext database looks
+identical from inside the app.
+
+The second test is the half that makes the first one evidence. It writes the identical record
+to an identical schema with no SQLCipher and asserts the name **is** found. Without it, the
+encryption assertion would also pass if the mapper dropped the field, if the write never
+happened, or if the search used the wrong encoding. A test that cannot fail for the right
+reason is not proof of anything.
+
+`close()` before reading is not incidental: without it the row can still be in the `-wal` file
+and the assertion passes for the wrong reason.
+
+This is instrumented — the Keystore has no JVM implementation, so it cannot run under
+Robolectric either — which puts it outside CI (4.5). Recorded as an open item.
+
+## 10.9 No plaintext-to-encrypted migration, and what it would be
+
+An existing unencrypted `astracare.db` will not open after this change; SQLCipher reports it as
+not a database. No build has ever been released, so the only affected databases are on
+development machines and the answer is to uninstall the app.
+
+Writing the migration anyway was rejected as speculative work on a path with no users, but the
+shape is recorded so the decision is reversible rather than forgotten. SQLCipher's own
+`sqlcipher_export` does it in one pass: open the plaintext file, `ATTACH` a new encrypted
+database with the passphrase, `SELECT sqlcipher_export('encrypted')`, `DETACH`, then swap the
+files and delete the original. The parts that need care are the ones a snippet omits — doing it
+before Room opens the database, surviving a process death mid-swap without destroying either
+copy, and carrying `user_version` across so Room does not then try to run every migration from
+scratch.
+
+## 10.10 A logging pass, which found nothing, which is the point
+
+Encryption at rest is undone by a `Log.d` that prints what was encrypted. Every logging call in
+the project was read against `Beneficiary.PII_FIELDS`:
+
+- The sync worker logs `PushSummary` and `PullSummary` — counts only, no records.
+- `MockRemoteBeneficiarySource` logs beneficiary **IDs**, which are device-minted UUIDs and
+  carry no PII.
+- `RoomDraftRepository` logs caught exceptions. SQLite exception messages carry statement text,
+  not bound values, so a failing insert does not log a name — but this is the one place where a
+  future change could leak without anyone noticing, and the absence of a logging abstraction
+  (6.4) means there is nowhere central to enforce it.
+
+Nothing needed changing. Recording that it was checked, and where the weak point is, is worth
+more than the change would have been.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
@@ -1383,7 +1634,7 @@ what to put in the new table (9.5) — which no schema diff can reason about at 
 | ~~detekt 1.23.8 vs Kotlin 2.2.10 compatibility~~ | **Resolved** — detekt parses Kotlin 2.2.10 without error; its embedded compiler handles the newer syntax | Closed |
 | `android.disallowKotlinSourceSets=false` required — KSP registers generated sources via `kotlin.sourceSets`, which AGP 9 rejects (3.5) | Third-party tooling gap | When KSP supports AGP 9 built-in Kotlin |
 | ~~Conflict-resolution strategy (last-write-wins vs vector clocks)~~ | **Resolved** — neither: detection keyed on `SyncStatus`, no clock comparison (9.1) | Closed |
-| SQLCipher vs Jetpack Security for field-level encryption | Not yet decided | With PII encryption |
+| ~~SQLCipher vs Jetpack Security for field-level encryption~~ | **Resolved** — SQLCipher over the whole database (10.1); Jetpack Security turned out to be deprecated (10.2) | Closed |
 | Cold-start numbers before/after Baseline Profile | Not yet measured | With the benchmark module |
 | MVI marker interfaces live in `:feature:patients/mvi` (5.1) | Deliberate — one consumer | Move to `:core:ui` at the second feature module |
 | ~~No Compose UI yet for either MVI screen~~ | **Resolved** — both screens built, `MainActivity` no longer renders the template (Part 6) | Closed |
@@ -1397,10 +1648,16 @@ what to put in the new table (9.5) — which no schema diff can reason about at 
 | A CONFLICTED record is a visible dead end — no merge UI (9.3) | Deliberate: detection without resolution loses nothing, and a wrong auto-merge is invisible | A field-level resolution screen, sized as its own day |
 | `MockRemoteBeneficiarySource` holds accepted records in memory only (8.7, 9.9) | Fine for a mock; a restart forgets the 'server' while the device keeps its cursor, so the next pull returns nothing until new pushes land | Stays a mock — stated scope boundary |
 | KMP variant split: domain compiles against `paging-common-desktop`, app ships `-android` (7.1) | Expected and routine | Watch for it if a NoSuchMethodError appears |
-| No logging abstraction — `RoomDraftRepository`, both workers and the mock call `android.util.Log` directly (6.4) | The sync engine has landed and this did not, which was the trigger named on Day 11. Still a knowing shortcut, now with more call sites | Next time a diagnostic is needed that `adb logcat` on a developer's desk cannot give |
+| No logging abstraction — `RoomDraftRepository`, the worker and the mock call `android.util.Log` directly (6.4) | Day 16 audited every call site against `PII_FIELDS` and found nothing leaking (10.10). With no central seam, that audit has to be repeated by hand after every change | The next diagnostic `adb logcat` cannot give, or the first log line that needs redaction |
 | Hand-rolled navigation (6.5) | Correct at two destinations | The first destination that takes an argument |
 | Room schema JSON for v2 and v3 is not committed; only `1.json` is in `core/data/schemas/` | Blocks the migration test that the exported schemas exist for | Commit them on the next `./gradlew` run |
 | No migration test for 1→2 or 2→3 | `MigrationTestHelper` needs instrumentation, which is out of CI (4.5) | Days 18-20, together with the `ORDER BY` test |
 | A server that expires cursors has no full-resync path (9.5) | `PullOutcome` has no "cursor too old" case; the mock never expires one | When there is a real backend with log compaction |
 | Deletes do not sync — no tombstones (9.1) | The app cannot delete a record, so the gap is not reachable today | With the first delete affordance |
 | A pull's server-side change arrives up to an hour late on an idle handset | The periodic pass is the only trigger when nothing is being captured | A push notification, which needs a real backend (4.2) |
+| An existing plaintext `astracare.db` will not open after Day 16 (10.9) | No released build, so only development devices are affected — uninstall and reinstall. The `sqlcipher_export` recipe is written down but not implemented | If a build is ever released before the next schema change |
+| The SQLCipher passphrase stays in heap for the life of the process (10.5) | `SupportOpenHelperFactory` keeps the array and offers no way to clear it; verified in the library source, not assumed | Nothing to do without a change upstream — it bounds the threat model rather than being a bug |
+| API 24-27 get no `setUnlockedDeviceRequired` (10.4) | The flag is API 28+. Those devices still get Keystore-bound encryption, just not the locked-device guarantee | Whenever minSdk rises to 28 |
+| `EncryptedDatabaseTest` is instrumented, so it is outside CI (4.5, 10.8) | The Keystore has no JVM implementation, so there is no Robolectric path either. The strongest test in the project does not run automatically | Days 18-20, with the migration and `ORDER BY` tests, if instrumented CI lands |
+| SQLCipher adds ~4MB of native library per ABI, unmeasured (10.1) | Accepted for the security it buys; no ABI split or app bundle configuration yet | With the benchmark work, alongside the cold-start numbers |
+| R8 is disabled — `optimization { enable = false }` in `app/build.gradle.kts` | Predates Day 16 and was not in its scope. A release build is therefore unshrunk and unobfuscated, and the modules' `keepRules` directories are unexercised | Its own day; enabling R8 blind on a Hilt + Room + Paging graph is not a ten-minute change |

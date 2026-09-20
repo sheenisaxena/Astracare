@@ -25,7 +25,15 @@ composeBom = "2026.02.01"
 room = "2.8.4"
 work = "2.11.2"
 paging = "3.5.0"
-security = "1.1.0"
+# SQLCipher for Android. The MODERN artifact: net.zetetic:sqlcipher-android, which needs
+# System.loadLibrary("sqlcipher"). The one every tutorial still shows is
+# net.zetetic:android-database-sqlcipher, which is a different coordinate with a different
+# init call (SQLiteDatabase.loadLibs) and is no longer the maintained line.
+sqlcipher = "4.19.0"
+# Named explicitly because sqlcipher-android is documented against a newer androidx.sqlite
+# than Room 2.8.4 pulls in, and because the README's `@aar` form skips POM resolution
+# entirely — in which case nothing else would bring it.
+sqlite = "2.7.0"
 benchmark = "1.4.1"
 
 # --- Kotlin libraries ---
@@ -112,7 +120,13 @@ paging-compose = { group = "androidx.paging", name = "paging-compose", version.r
 paging-common = { group = "androidx.paging", name = "paging-common", version.ref = "paging" }
 
 # --- Security ---
-androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "security" }
+# androidx.security:security-crypto was pencilled in here during planning and is NOT used:
+# every API in it (EncryptedSharedPreferences, EncryptedFile, MasterKey) was deprecated in
+# June 2025 in favour of platform APIs and direct Keystore use. The entry is left out
+# rather than left unused, so nobody reaches for it on the strength of it being here.
+# See DatabasePassphrase and DECISION_LOG 10.2.
+sqlcipher-android = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }
+androidx-sqlite = { group = "androidx.sqlite", name = "sqlite", version.ref = "sqlite" }
 
 # --- Performance ---
 androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmark" }

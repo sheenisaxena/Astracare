@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+  Auto Backup on Android 11 and below.
+
+  Empty on purpose. `android:allowBackup="false"` in the manifest already disables Auto
+  Backup outright, so nothing here is consulted — the file stays because the manifest
+  attribute still points at it and because deleting it would make the next person wonder
+  whether backup was considered.
+
+  On the encryption: an Auto Backup of this database would be useless as well as unwanted.
+  The SQLCipher passphrase is wrapped by an Android Keystore key that cannot be exported or
+  restored to another device, so a restored database would be an unopenable blob. Backing up
+  a health worker's beneficiary records to a consumer cloud account is the reason it is off;
+  that it would not even work is the second reason.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
 </full-backup-content>

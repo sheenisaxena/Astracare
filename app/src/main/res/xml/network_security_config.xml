@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+  No cleartext, anywhere, with no per-domain exemptions.
+
+  The app makes no network calls today — the "server" is `MockRemoteBeneficiarySource`, which
+  is an in-memory object. So this config protects nothing right now, and that is exactly why
+  it is worth adding now: the default is inherited from targetSdk, the exemption list is what
+  grows under deadline pressure, and the moment to write "no cleartext" is before there is a
+  staging server someone wants to reach over http.
+
+  `cleartextTrafficPermitted="false"` is already the platform default at targetSdk 28 and
+  above. Stating it explicitly means a future targetSdk change cannot quietly relax it, and
+  means a reviewer can see the intent rather than infer it.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

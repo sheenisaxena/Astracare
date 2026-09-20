@@ -5,10 +5,12 @@ import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.astracare.core.domain.repository.LocalStoreUnavailableException
 import com.astracare.core.domain.usecase.PullRemoteChangesUseCase
 import com.astracare.core.domain.usecase.PullSummary
 import com.astracare.core.domain.usecase.PushPendingRecordsUseCase
 import com.astracare.core.domain.usecase.PushSummary
+import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
@@ -44,24 +46,49 @@ import dagger.assisted.AssistedInject
  *
  * The cost is honest: on the rare failure that is specific to one record rather than to the
  * connection, the pull is delayed until the retry. Bounded, and cheaper than the alternative.
+ *
+ * ## Why the use cases arrive as `Lazy`
+ *
+ * Since Day 16 the database is encrypted with a key that cannot be used while the device is
+ * locked, so *opening* it is an operation that can legitimately fail. Resolving either use case
+ * pulls the repository, which pulls the DAO, which opens the database — and if that happened in
+ * this class's constructor, the failure would land in WorkManager's worker factory as
+ * "Could not instantiate SyncBeneficiariesWorker". That reads like a Hilt wiring bug, gives no
+ * hint that the phone was simply locked, and cannot be turned into a retry because [doWork] was
+ * never reached.
+ *
+ * [Lazy] moves that resolution inside [doWork], where it is a catchable
+ * [LocalStoreUnavailableException] and a correct `Result.retry()`. The general rule is worth
+ * stating: **a worker whose dependencies can fail for transient, expected reasons must not
+ * resolve them in its constructor.** See DECISION_LOG 10.4.
  */
 @HiltWorker
 class SyncBeneficiariesWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
-    private val pushPendingRecords: PushPendingRecordsUseCase,
-    private val pullRemoteChanges: PullRemoteChangesUseCase,
+    private val pushPendingRecords: Lazy<PushPendingRecordsUseCase>,
+    private val pullRemoteChanges: Lazy<PullRemoteChangesUseCase>,
 ) : CoroutineWorker(appContext, params) {
 
-    override suspend fun doWork(): Result {
-        val push = pushPendingRecords()
+    override suspend fun doWork(): Result = try {
+        syncOnce()
+    } catch (e: LocalStoreUnavailableException) {
+        // Almost always: WorkManager started this pass on a locked handset, in a process that
+        // was not already running, so the Keystore will not release the database passphrase.
+        // Nothing is wrong — the data is meant to be unreadable then. Retry when it is not.
+        Log.i(TAG, "Local store unavailable; deferring this pass", e)
+        retryOrGiveUp()
+    }
+
+    private suspend fun syncOnce(): Result {
+        val push = pushPendingRecords.get()()
         Log.d(TAG, "Push finished: $push (attempt ${runAttemptCount + 1})")
 
         if (push is PushSummary.Interrupted) {
             return retryOrGiveUp()
         }
 
-        val pull = pullRemoteChanges()
+        val pull = pullRemoteChanges.get()()
         Log.d(TAG, "Pull finished: $pull")
 
         return when (pull) {

@@ -24,6 +24,12 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:common"))
 
+    // SQLCipher replaces the framework SQLite implementation underneath Room, so it is a
+    // dependency of this module alone — nothing above :core:data knows the database is
+    // encrypted, which is the property that makes it removable.
+    implementation(libs.sqlcipher.android)
+    implementation(libs.androidx.sqlite)
+
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     // Lets a @Query return PagingSource. Without it Room's processor rejects the return type
