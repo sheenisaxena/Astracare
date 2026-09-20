@@ -1983,6 +1983,142 @@ This day closed the JVM-side gaps. It did not close these, and the open items ta
 
 ---
 
+# Part 13 — A logging seam, the mock server's own tests, and where MockK earns its place
+
+Day 19. The plan: *"MockK for the mock remote layer. Turbine for Flow assertions. Explicit
+tests for the sync conflict-resolution path."*
+
+Two of those three were already true. Turbine has been driving the effect-channel assertions in
+both ViewModel tests since Day 10. The conflict path has twenty-three tests across
+`ConflictResolverTest` and `PullRemoteChangesUseCaseTest`, written on Day 14 alongside the code.
+
+What was left was the first clause, and it turned out to be two separate problems wearing one
+sentence.
+
+## 13.1 A logging call decided whether a class could be tested
+
+`MockRemoteBeneficiarySource` is the stand-in server the entire sync engine is designed
+against, and until today it had no direct test — it was verified only through the use cases
+that consume it. That is backwards: a bug in it does not fail one test, it quietly changes what
+a dozen others are actually asserting.
+
+The reason it had none was two `Log.d` calls. `android.util.Log` is a stub on the JVM
+unit-test classpath and every method on it throws, so **any class that calls it cannot have a
+plain unit test.**
+
+That is a terrible reason for a class to be untestable, and it had been sitting in the open
+items as 6.4 since Day 11 with the trigger written as "the next diagnostic `adb logcat` cannot
+give". The actual trigger was nothing to do with diagnostics.
+
+The two escape hatches were both worse than fixing it:
+
+- **Robolectric** — a large dependency and a much slower test, adopted to satisfy two log
+  lines, and it leaves the next class with the same problem exactly where it started.
+- **`testOptions.unitTests.isReturnDefaultValues = true`** — one line, and it silently stubs
+  every Android method in the module to return a default. The *next* test to touch a real
+  framework API gets a quiet zero instead of an error. Cheap now, expensive at the worst moment.
+
+So: a `Logger` interface in `:core:common`, three methods, tags as parameters. The
+implementation lives in `:app`, because `:core:common` is a Kotlin/JVM module and the compiler
+will not let it reference `android.util.Log` at all. One file in the project now knows logcat
+exists; everything else takes a `Logger` and is testable without a device.
+
+Deliberately not a logging framework — no structured fields, no lazy message lambdas, no
+appender configuration. It is a seam. Designing more would be designing for a crash-reporting
+integration whose shape is not knowable yet.
+
+There is no fallback binding in any core module, so forgetting to provide one is a Hilt compile
+error rather than an app that silently logs nothing. And the interface is now the single place
+the "no PII in logs" rule from 10.10 *could* be enforced mechanically — which is a real
+argument for it over scattered `Log` calls, and is not enforced yet.
+
+**Concept — when a cross-cutting utility makes code untestable, the utility is the bug.**
+
+## 13.2 What is worth testing in a mock
+
+Not "does it store things" — that is a `LinkedHashMap`. What matters are the properties the
+sync engine is *built against*, because if any of them is wrong then the engine's own tests are
+passing for the wrong reason:
+
+- **Idempotent accept.** Day 13's retry story rests entirely on a second delivery being a
+  no-op.
+- **Deterministic failure.** Every fifth call, at positions 5 and 10 of ten, every run. A
+  random mock produces a demo that sometimes misbehaves and a bug nobody can reproduce.
+- **A correct delta.** Too few records and updates are lost; everything, and the cursor is
+  decoration.
+- **A clock the device does not control.** The conflict design exists for the case where the
+  two disagree (9.1, 9.5). A mock that stamped server-side edits with `timeProvider.now()`
+  would model a server whose clock agrees with the handset's, and Day 14's tests would pass
+  without demonstrating anything.
+
+Two smaller ones are worth their lines. A pull with an unreadable cursor falls back to a full
+pull rather than throwing — the client stores the cursor verbatim and never interprets it, so
+a corrupted one is possible, and "expensive" is the safe direction where "stranded" is not.
+And the simulated round trip is asserted against virtual time, so it costs nothing to check and
+still fails if someone deletes the `delay` as pointless — it is what makes the PENDING chip
+visible long enough to watch it flip on a real device.
+
+## 13.3 Fakes by default, MockK where the interaction *is* the behaviour
+
+MockK has been on every test classpath since Day 2 and had never been used once. The plan kept
+promising to justify it. The honest options were to use it somewhere it genuinely wins, or to
+delete it and defend the absence — being undecided is the one answer that is not defensible.
+
+The policy, now written down:
+
+> **A fake asserts on state; a mock asserts on an interaction. Prefer the fake, because "the
+> record reached storage marked PENDING" survives a refactor and "`upsert` was called once"
+> does not. Reach for the mock only when the interaction is the entire observable behaviour.**
+
+`SyncSchedulingTest` is the one place that applies. `SyncScheduler.requestSync()` returns
+nothing, enqueues work in another system, and leaves no state to inspect. The only observable
+fact is whether it was called — and the property that matters is a *negative*:
+
+- A local save must request a sync, or a captured record waits for the hourly pass.
+- `applyRemote` must **not**, or every pull enqueues a push of everything it just received —
+  the app in a conversation with itself, on a metered connection, on a handset whose battery
+  has to last a working day.
+
+Negative interactions are exactly what a fake is bad at. A recording fake can only prove a list
+is empty, which is the same assertion written longhand plus a class to maintain.
+`verify(exactly = 0)` says it once.
+
+That behaviour was defended by a comment in `OfflineFirstBeneficiaryRepository` and nothing
+else, and it was the most plausible thing in the file for a future refactor to break — "both of
+these write a record, why do they differ?" is a reasonable question to ask and a wrong one to
+act on.
+
+The DAO in that same file is still a fake. It has real state, the tests read it back, and its
+conditional writes have to behave like the SQL they stand in for.
+
+## 13.4 Mutation testing found the gap that reading did not
+
+Six mutations against the day's claims. Five were caught immediately. One survived, and it is
+the most instructive result in two days of testing work:
+
+```
+accepted.put(id, record)   ->   accepted.putIfAbsent(id, record)
+```
+
+The idempotence test pushed the same record twice and asserted the server held **one** record.
+`putIfAbsent` also yields one record. The test passed against a server that silently keeps the
+*first* version of a record forever — so every subsequent edit a health worker made would be
+accepted, acknowledged, and discarded.
+
+**Idempotent upsert and ignore-if-present are different guarantees**, and the test had been
+asserting the weaker one without anyone noticing, including the person who wrote it. The fix is
+one more test: push, edit, push again, and assert the stored village is the *new* one.
+
+This is the second consecutive day where mutation testing found something reading the code did
+not, and the pattern in both cases is the same — a test that asserts a *consequence* of the
+property rather than the property itself. A record count is a consequence of idempotence. It is
+also a consequence of several things that are not idempotence.
+
+**Concept — "the test passes" and "the test would fail if this broke" are different claims**,
+and only the second one is worth anything.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
@@ -2006,7 +2142,7 @@ This day closed the JVM-side gaps. It did not close these, and the open items ta
 | A CONFLICTED record is a visible dead end — no merge UI (9.3) | Deliberate: detection without resolution loses nothing, and a wrong auto-merge is invisible | A field-level resolution screen, sized as its own day |
 | `MockRemoteBeneficiarySource` holds accepted records in memory only (8.7, 9.9) | Fine for a mock; a restart forgets the 'server' while the device keeps its cursor, so the next pull returns nothing until new pushes land | Stays a mock — stated scope boundary |
 | KMP variant split: domain compiles against `paging-common-desktop`, app ships `-android` (7.1) | Expected and routine | Watch for it if a NoSuchMethodError appears |
-| No logging abstraction — `RoomDraftRepository`, the worker and the mock call `android.util.Log` directly (6.4) | Day 16 audited every call site against `PII_FIELDS` and found nothing leaking (10.10). With no central seam, that audit has to be repeated by hand after every change | The next diagnostic `adb logcat` cannot give, or the first log line that needs redaction |
+| ~~No logging abstraction — classes call `android.util.Log` directly (6.4)~~ | **Resolved** — `Logger` in `:core:common`, Android implementation in `:app` (13.1). Forced by testability, not diagnostics: a class calling `android.util.Log` cannot have a JVM unit test | Closed |
 | Hand-rolled navigation (6.5) | Correct at two destinations | The first destination that takes an argument |
 | Room schema JSON for v2 and v3 is not committed; only `1.json` is in `core/data/schemas/` | Blocks the migration test that the exported schemas exist for | Commit them on the next `./gradlew` run |
 | No migration test for 1→2 or 2→3 | `MigrationTestHelper` needs instrumentation, which is out of CI (4.5) | Days 18-20, together with the `ORDER BY` test |
@@ -2025,5 +2161,7 @@ This day closed the JVM-side gaps. It did not close these, and the open items ta
 | Client RBAC hides affordances and refuses actions; it secures nothing (4.3, 11.2) | Stated in the README and next to the code. The role is on the device and the device belongs to the user | Server-side authorisation on every request |
 | `audit_log` grows without bound and is never pruned | One line per save on a table nobody deletes from — and deletion is impossible by design (11.3), so pruning needs a deliberate mechanism rather than a `DELETE` | When a real deployment's volume is known; likely a server-side archive plus a local retention window |
 | DPDP: children's data attracts enhanced protections this app does not implement | Beneficiaries are children under five. Verifiable parental consent, and the consent notice and retention machinery around it, are absent | Out of scope for a portfolio build; named in the README rather than implied to be handled |
-| Mutation testing is a scratch script, not part of the build (12.5) | Run by hand over Day 18's code: eight mutations, seven caught, one a documented equivalent mutant. Nothing stops the next test from being one that cannot fail | Kotlin support in the available plugins is thin enough to be its own decision |
-| `MockRemoteBeneficiarySource` is asserted only through its consumers (12.6) | Its idempotent re-accept, deterministic failure cadence and delta pull have no direct test | Day 19, which names the mock remote layer |
+| Mutation testing is a scratch script, not part of the build (12.5, 13.4) | Run by hand two days running, and it found a real gap both times — most recently a test asserting a *consequence* of idempotence rather than idempotence itself. Nothing in CI stops the next test from being one that cannot fail | Kotlin support in the available plugins is thin enough to be its own decision |
+| ~~`MockRemoteBeneficiarySource` is asserted only through its consumers (12.6)~~ | **Resolved** — 16 direct tests (13.2), unblocked by the logging seam | Closed |
+| The `Logger` seam could enforce the no-PII-in-logs rule and does not (10.10, 13.1) | Every call site is currently clean, checked by hand. One interface is now the single place a check could live | When there is a redaction requirement, or a crash reporter to route through |
+| `SyncBeneficiariesWorker` is the only `Logger` consumer with no test at all (9.8) | Its summary-to-`Result` mapping still needs `work-testing`; injecting the logger changed its constructor without making it testable | Day 20, or whenever `work-testing` lands |

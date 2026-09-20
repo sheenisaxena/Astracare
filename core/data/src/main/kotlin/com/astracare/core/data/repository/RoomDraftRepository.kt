@@ -1,8 +1,8 @@
 package com.astracare.core.data.repository
 
-import android.util.Log
 import com.astracare.core.common.di.AstraCareDispatcher
 import com.astracare.core.common.di.Dispatcher
+import com.astracare.core.common.log.Logger
 import com.astracare.core.common.time.TimeProvider
 import com.astracare.core.data.database.dao.DraftDao
 import com.astracare.core.data.database.entity.DraftEntity
@@ -29,8 +29,9 @@ import javax.inject.Inject
  * invisible, and this is the one place the trade-off is worth making — with a log line so it
  * is still diagnosable.
  *
- * `Log` rather than a logging abstraction is a knowing shortcut; the project has no logging
- * infrastructure yet and inventing one here would be the wrong day for it. Listed as a gap.
+ * The `Logger` seam arrived on Day 19 and replaced the direct `android.util.Log` calls this
+ * class shipped with. It was not the diagnostic need that forced it — it was that a class
+ * calling `android.util.Log` cannot have a plain JVM unit test.
  *
  * ## Why the dispatcher is injected
  *
@@ -42,27 +43,28 @@ import javax.inject.Inject
  */
 class RoomDraftRepository @Inject constructor(
     private val dao: DraftDao,
+    private val logger: Logger,
     private val timeProvider: TimeProvider,
     @Dispatcher(AstraCareDispatcher.IO) private val ioDispatcher: CoroutineDispatcher,
 ) : DraftRepository {
 
     override suspend fun load(): CaptureDraft? = withContext(ioDispatcher) {
         runCatching { dao.load()?.toDraft() }
-            .onFailure { Log.w(TAG, "Could not read the saved draft; starting from an empty form", it) }
+            .onFailure { logger.warn(TAG, "Could not read the saved draft; starting from an empty form", it) }
             .getOrNull()
     }
 
     override suspend fun save(draft: CaptureDraft) {
         withContext(ioDispatcher) {
             runCatching { dao.upsert(draft.toEntity(timeProvider.now().epochMillis)) }
-                .onFailure { Log.w(TAG, "Could not autosave the draft; will retry on the next edit", it) }
+                .onFailure { logger.warn(TAG, "Could not autosave the draft; will retry on the next edit", it) }
         }
     }
 
     override suspend fun clear() {
         withContext(ioDispatcher) {
             runCatching { dao.clear() }
-                .onFailure { Log.w(TAG, "Could not clear the saved draft", it) }
+                .onFailure { logger.warn(TAG, "Could not clear the saved draft", it) }
         }
     }
 

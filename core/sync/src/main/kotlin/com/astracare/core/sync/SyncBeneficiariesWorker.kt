@@ -1,10 +1,10 @@
 package com.astracare.core.sync
 
 import android.content.Context
-import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.astracare.core.common.log.Logger
 import com.astracare.core.domain.repository.LocalStoreUnavailableException
 import com.astracare.core.domain.usecase.PullRemoteChangesUseCase
 import com.astracare.core.domain.usecase.PullSummary
@@ -68,6 +68,7 @@ class SyncBeneficiariesWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val pushPendingRecords: Lazy<PushPendingRecordsUseCase>,
     private val pullRemoteChanges: Lazy<PullRemoteChangesUseCase>,
+    private val logger: Logger,
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
@@ -76,20 +77,20 @@ class SyncBeneficiariesWorker @AssistedInject constructor(
         // Almost always: WorkManager started this pass on a locked handset, in a process that
         // was not already running, so the Keystore will not release the database passphrase.
         // Nothing is wrong — the data is meant to be unreadable then. Retry when it is not.
-        Log.i(TAG, "Local store unavailable; deferring this pass", e)
+        logger.info(TAG, "Local store unavailable; deferring this pass", e)
         retryOrGiveUp()
     }
 
     private suspend fun syncOnce(): Result {
         val push = pushPendingRecords.get()()
-        Log.d(TAG, "Push finished: $push (attempt ${runAttemptCount + 1})")
+        logger.debug(TAG, "Push finished: $push (attempt ${runAttemptCount + 1})")
 
         if (push is PushSummary.Interrupted) {
             return retryOrGiveUp()
         }
 
         val pull = pullRemoteChanges.get()()
-        Log.d(TAG, "Pull finished: $pull")
+        logger.debug(TAG, "Pull finished: $pull")
 
         return when (pull) {
             // Everything pending was offered and answered for, and everything the server had
@@ -118,7 +119,7 @@ class SyncBeneficiariesWorker @AssistedInject constructor(
      */
     private fun retryOrGiveUp(): Result =
         if (runAttemptCount + 1 >= MAX_ATTEMPTS) {
-            Log.w(TAG, "Giving up after $MAX_ATTEMPTS attempts; periodic sync will retry")
+            logger.warn(TAG, "Giving up after $MAX_ATTEMPTS attempts; periodic sync will retry")
             Result.failure()
         } else {
             Result.retry()

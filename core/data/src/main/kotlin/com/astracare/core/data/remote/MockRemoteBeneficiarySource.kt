@@ -1,8 +1,8 @@
 package com.astracare.core.data.remote
 
-import android.util.Log
 import com.astracare.core.common.di.AstraCareDispatcher
 import com.astracare.core.common.di.Dispatcher
+import com.astracare.core.common.log.Logger
 import com.astracare.core.common.time.TimeProvider
 import com.astracare.core.domain.remote.PullOutcome
 import com.astracare.core.domain.remote.PushOutcome
@@ -67,6 +67,7 @@ import javax.inject.Singleton
 @Singleton
 class MockRemoteBeneficiarySource @Inject constructor(
     private val timeProvider: TimeProvider,
+    private val logger: Logger,
     @Dispatcher(AstraCareDispatcher.IO) private val ioDispatcher: CoroutineDispatcher,
 ) : RemoteBeneficiarySource {
 
@@ -100,7 +101,7 @@ class MockRemoteBeneficiarySource @Inject constructor(
 
             when {
                 pushCount % TRANSIENT_FAILURE_EVERY == 0 -> {
-                    Log.d(TAG, "Simulated connection failure for ${beneficiary.id.value}")
+                    logger.debug(TAG, "Simulated connection failure for ${beneficiary.id.value}")
                     PushOutcome.TransientFailure(IOException("simulated connection failure"))
                 }
 
@@ -122,7 +123,7 @@ class MockRemoteBeneficiarySource @Inject constructor(
                         StoredRecord(beneficiary.copy(syncStatus = SyncStatus.SYNCED), nextSequence()),
                     ) != null
                     if (isRedelivery) {
-                        Log.d(TAG, "Idempotent re-accept of ${beneficiary.id.value}")
+                        logger.debug(TAG, "Idempotent re-accept of ${beneficiary.id.value}")
                     }
                     PushOutcome.Accepted
                 }
@@ -138,7 +139,7 @@ class MockRemoteBeneficiarySource @Inject constructor(
                 pullCount++
 
                 if (pullCount % TRANSIENT_FAILURE_EVERY == 0) {
-                    Log.d(TAG, "Simulated connection failure on pull")
+                    logger.debug(TAG, "Simulated connection failure on pull")
                     PullOutcome.TransientFailure(IOException("simulated connection failure"))
                 } else {
                     simulateAnotherWorkersEdit()
@@ -190,7 +191,7 @@ class MockRemoteBeneficiarySource @Inject constructor(
             updatedAt = Timestamp(sequence),
         )
         accepted[edited.id] = StoredRecord(edited, sequence)
-        Log.d(TAG, "Simulated a server-side edit to ${edited.id.value}")
+        logger.debug(TAG, "Simulated a server-side edit to ${edited.id.value}")
     }
 
     /** The current head of the change stream, seeding it from the device clock on first use. */
