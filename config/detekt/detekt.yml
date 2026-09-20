@@ -66,6 +66,8 @@ style:
     excludes:
       - '**/test/**'
       - '**/androidTest/**'
+      # Day 20: the shared test source set, compiled into both of the above.
+      - '**/sharedTest/**'
       # Colour literals and dimension tokens are inherently numeric.
       - '**/ui/theme/**'
       - '**/designsystem/**'
@@ -83,6 +85,7 @@ style:
         value: 'TODO:'
     excludes:
       - '**/test/**'
+      - '**/sharedTest/**'
 
 complexity:
   LongParameterList:

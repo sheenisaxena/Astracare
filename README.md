@@ -99,7 +99,8 @@ reports 21, but it moves on Studio updates — a standalone JDK is the more stab
 
 ```bash
 ./gradlew assembleDebug
-./gradlew test
+./gradlew test                   # includes the Robolectric end-to-end UI test
+./gradlew connectedDebugAndroidTest   # migration, DAO and encryption tests; needs a device
 ./gradlew detekt                 # static analysis + ktlint rules
 ./gradlew detekt --auto-correct  # fix what can be fixed automatically
 ```
@@ -129,10 +130,14 @@ git config core.hooksPath   # should print .githooks
 - WorkManager sync: push, pull, and conflict detection keyed on sync status rather than clocks
 - Database encrypted at rest with SQLCipher, passphrase wrapped by an Android Keystore key
 - Two roles with a declarative permission matrix, and an append-only audit trail
+- 155 JVM tests, including an end-to-end Compose journey on Robolectric and a test asserting
+  that no personally identifying information reaches the log
+- Instrumented tests for every migration, the `CASE` ordering, the conditional writes and the
+  append-only triggers — written, and runnable on demand rather than in CI
 
 **Next**
 
-- Unit and UI test suites; instrumented migration and query tests
+- An instrumented CI lane, so the database tests run on every push rather than on request
 - Macrobenchmark module with baseline profiles
 - R8 enabled for release builds
 

@@ -23,6 +23,24 @@ android {
             }
         }
     }
+
+    // One set of fakes, two runners. `src/sharedTest` is not an AGP convention — it is an
+    // ordinary directory added to both test source sets, which is the standard way to stop
+    // the doubles being written twice and drifting apart. The Robolectric run uses them
+    // today; a device run of the same tests uses the same objects, unchanged.
+    sourceSets {
+        getByName("test") { kotlin.srcDir("src/sharedTest/kotlin") }
+        getByName("androidTest") { kotlin.srcDir("src/sharedTest/kotlin") }
+    }
+
+    testOptions {
+        unitTests {
+            // Robolectric reads the merged manifest and the real resources. Without this the
+            // unit-test classpath carries neither, and a Compose test fails on inflating the
+            // theme rather than on anything it meant to assert.
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -48,4 +66,19 @@ dependencies {
     // and a module that names a type should depend on it.
     implementation(libs.work.runtime.ktx)
     implementation(libs.androidx.hilt.work)
+
+    // Day 20. The convention plugins put the Compose test artifacts and Hilt's test support
+    // on `androidTestImplementation` only, because until now every UI test was instrumented.
+    // These four lines are what move that capability to the JVM side, and they are declared
+    // here rather than in the convention plugins deliberately: :app is the only module with
+    // an Activity to launch, so a library module inheriting Robolectric would be paying a
+    // large dependency for nothing.
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.hilt.android.testing)
+    // Generates the test application component. Without it @HiltAndroidTest compiles and
+    // then fails at runtime saying the test was not annotated — one of Hilt's less helpful
+    // messages, because the annotation is right there.
+    kspTest(libs.hilt.compiler)
 }

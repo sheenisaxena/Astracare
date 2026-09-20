@@ -2118,6 +2118,221 @@ also a consequence of several things that are not idempotence.
 and only the second one is worth anything.
 
 ---
+---
+
+# Part 14 — The end-to-end test, the database tests, and a PII rule that is now mechanical
+
+Day 20. The plan: *"E2E Compose UI test for capture → list. Audit that no PII reaches the
+logs."*
+
+Two items, and the second one took an hour. The first one turned into the day, because writing
+it meant deciding where this project's UI tests are allowed to run — and answering that
+question forced three tests that had been deferred since Day 12 to be written as well.
+
+## 14.1 Robolectric, and why this is not a reversal of Day 19
+
+`app/src/androidTest` has held the Hilt scaffolding for an end-to-end test since Day 8. The
+test was never written. That is not an accident of scheduling: DECISION_LOG 4.5 keeps
+instrumented tests out of CI, so anything written there runs when somebody remembers, and Day
+18's write-up made exactly that complaint about every instrumented test in the project.
+
+Writing the flagship UI test into a source set CI does not execute would have produced a
+demonstration rather than a test.
+
+Robolectric runs Android framework code on the JVM, which puts it in `./gradlew test`.
+
+Day 19 **rejected** Robolectric, and the two decisions have to be read together or the second
+one looks like drift. There, the problem was that `MockRemoteBeneficiarySource` called
+`android.util.Log` and so could not be unit-tested; Robolectric would have solved it by bringing
+in a large dependency to avoid writing a thirty-line interface. The seam was the better answer
+and it is still the better answer — it also made 14.4 below possible, which Robolectric would
+not have.
+
+Here there is no thirty-line alternative. There is no way to drive a real Compose hierarchy on
+the JVM without it. Same tool, different question, opposite answer.
+
+**Concept — a rejected dependency is rejected for a reason, not forever.** "We decided against
+Robolectric" is not a fact about Robolectric; it is a fact about one problem.
+
+## 14.2 One journey, not a suite of screen tests
+
+`CaptureToHistoryTest` has three tests. It could have had twenty.
+
+The reason it does not: a UI test is the slowest, most fragile test in any Android project, and
+its value is concentrated in the things no cheaper test can reach. By Day 20 this project has
+152 JVM tests covering validation, reducers, mappers, conflict resolution, permissions, the
+mock server and the effect channel. Each of them stops at a module boundary. Nothing so far
+asserts that the boundaries *line up*: that Hilt can actually assemble the graph, that the nav
+shell routes on an effect, that a ViewModel's state reaches a composable, that the list re-reads
+what capture wrote.
+
+So the three tests are chosen to cross as many seams as possible rather than to cover screens:
+
+1. **Capture → save → it appears in the list.** The whole loop, including the effect that pops
+   the back stack. This is the one that fails if the wiring is wrong anywhere.
+2. **Invalid input is refused and what was typed survives.** Validation reaching the screen,
+   and the property from 5.7 that a health worker standing in a village does not lose five
+   fields because the age was wrong.
+3. **A supervisor is not offered capture.** The permission matrix as behaviour rather than as
+   `RolePermissionsTest`'s table.
+
+Screen-level assertions — that a chip is the right colour, that a label reads correctly — are
+cheaper and more reliable as Compose previews and as the unit tests that already exist.
+
+## 14.3 The whole data layer is faked now, and that is a decision, not a convenience
+
+Until today `TestDataModule` replaced `BeneficiaryRepository` and let the real Room-backed
+implementations serve everything else. That worked on a device. It cannot work on the JVM: since
+Day 16 the database is opened by SQLCipher, which is a **native** library, and Robolectric
+cannot load a `.so`. The first screen to ask for a `DraftRepository` would take the run down
+with an `UnsatisfiedLinkError` naming neither the database nor the test.
+
+So the module now fakes six bindings, and a second module replaces `SyncModule` and
+`WorkManagerModule` — both, because replacing only the scheduler leaves a `WorkManager` provider
+that still has to resolve (the same trap as 9.11).
+
+The division this forces is worth stating as a rule rather than treating as a workaround:
+
+> **UI tests run against fakes. The real database is tested directly.**
+
+That is only honest if the second half is true, and until this morning it was not. Which is how
+a day about a UI test became a day about SQL.
+
+The fakes are also deliberately *behavioural* rather than empty. `FakeSessionRepository` really
+switches roles, so test 3 exercises the gate. `FakeRemoteBeneficiarySource` fails every call
+transiently, which leaves records PENDING — the state a health worker with no signal actually
+sees, and the one the list most needs to render. A fake that accepted records would have the
+list flip to SYNCED mid-assertion for reasons unrelated to anything under test.
+
+All six are `@Singleton`, because the point of an end-to-end test is that what one screen writes
+another screen reads.
+
+## 14.4 The no-PII rule, made mechanical — including the cause chain
+
+Day 16 audited every logging call site by hand and found nothing leaking (10.10). That audit was
+true about a commit and expired the moment anyone added a line.
+
+Day 19's `Logger` seam is what makes it checkable. `PiiLoggingTest` substitutes a recorder,
+drives the real repository and mock-server code paths with a beneficiary named
+`Zzyzx Qwertyuiop` from `Xylophonia`, and asserts neither string ever appears. It includes a
+control test that deliberately logs the name, so a recorder that silently captured nothing would
+fail rather than pass everything.
+
+The part worth writing down is the cause chain. `Logger.warn` takes a `Throwable`, and a
+throwable's message is written by whoever threw it. SQLite errors normally name the failing
+*statement* and not the bound values — which is why the hand audit passed — but that is a
+property of the current driver, not a guarantee, and nothing in this app controls it. Room could
+change it in a point release.
+
+So the recorder flattens tag, message and the entire cause chain into one string, and the fake
+DAO throws exceptions whose messages imitate real driver output. If a driver or a wrapper ever
+starts embedding values in an exception message, this test fails.
+
+**Residual risk, named rather than assumed away:** this proves the *paths the test drives* do
+not leak. It is not a static guarantee about every future call site. A `Logger` that rejected
+PII structurally — typed log arguments, or a redacting implementation — would be, and the open
+items table carries that. `SyncBeneficiariesWorker` also logs and is not covered here, because
+it cannot be constructed without WorkManager; its messages are `PushSummary` and `PullSummary`,
+which carry counts and no records.
+
+## 14.5 The SQL, finally
+
+`BeneficiaryDaoTest` is the test 12.6 said was missing and 7.2 said was missing before that.
+Four claims this project makes in prose, none of which had any automated check:
+
+- the `CASE` ordering that moved out of Kotlin on Day 12,
+- `updateSyncStatusIfUnchanged` and `replaceIfUnchanged`, the two conditional writes behind the
+  stale-write guard (9.7),
+- `INSERT OR IGNORE` behind the pull (9.1), which must not overwrite a local capture,
+- the append-only triggers (11.3).
+
+A fake DAO cannot verify any of them, by construction. `FakeBeneficiaryRepository`'s own
+documentation says so: a fake that sorted correctly would prove the fake sorts correctly and
+would keep passing while the real `ORDER BY` was wrong.
+
+One test is worth calling out. `pagedByAttention_matchesTheDomainDeclaration` inserts one record
+per `SyncStatus` and asserts the query returns them in exactly `RecordAttentionOrder.byUrgency`.
+`RecordAttentionOrderTest` pins the domain's list; this pins the SQL; **neither alone proves
+they agree**, and nothing in the type system connects a Kotlin enum to a `CASE` arm. The join
+between the two halves was the actual gap.
+
+The triggers are tested on the **fresh-install** path — an in-memory database built by Room from
+the compiled entities, with the same `RoomDatabase.Callback` the production builder uses. That
+is the trap 11.3 identified: Room runs no migration on a new install, `@Entity` cannot declare a
+trigger, and a migration-only version of the guarantee holds on upgraded devices and silently
+fails on every fresh one. Room does not validate triggers, so nothing else would notice.
+
+## 14.6 The migration chain, and a drift guard for the next one
+
+`MigrationTest` is the other long-deferred one, and it matters more than anything else written
+today. This app's premise is holding records that have not reached a server, and `DatabaseModule`
+deliberately has no `fallbackToDestructiveMigration` (9.12). A wrong migration does not degrade
+the app — it fails to open the database on the one upgrade where a health worker's unsent
+records are inside it.
+
+`runMigrationsAndValidate` checks more than "the SQL ran": it compares the resulting schema
+against the compiled one from the exported JSON and fails on a missing index, a wrongly nullable
+column, a column-order mismatch. Those are precisely the differences that produce Room's
+"Migration didn't properly handle" crash at runtime and are invisible to a migration that merely
+executes. This is what `core/data/schemas/` has been committed for since Day 9 — for a test that
+did not exist for eleven days.
+
+Each migration is tested alone, and then 1→4 is tested as a chain carrying a PENDING record
+through every version. That is a different claim: an intermediate step that dropped and
+recreated `beneficiaries` would pass all three individual tests.
+
+The last test is not about migrations at all:
+
+```kotlin
+assertEquals(DATABASE_VERSION - 1, ALL_MIGRATIONS.size)
+```
+
+Bumping the version without writing a migration compiles, ships, and crashes on first upgrade.
+This turns that into a failing test — and it is the test most likely to catch a mistake made six
+months from now by someone who has never read this file.
+
+These run **unencrypted** while the app runs encrypted, and that is deliberate isolation rather
+than an oversight: a migration is SQL, SQLCipher swaps the implementation beneath SQL without
+changing its semantics, and wiring the Keystore in would mean a failed key unwrap and a broken
+migration produce the same red test. The cost is stated in the file: this does not prove an
+*encrypted* v3 upgrades to v4. `EncryptedDatabaseTest` covers that path against a real device.
+
+## 14.7 String literals in the UI test, and a grep that makes them safe
+
+`CaptureToHistoryTest` asserts on `"Add record"` and `"No records yet"` rather than calling
+`getString(R.string.list_action_add)`.
+
+That is usually considered the wrong way round, so the reason: a test that resolves the same
+resource the screen resolves passes when both are wrong. Rename a string's *value* and the test
+follows it silently. The literals are what a person actually reads on the screen, and asserting
+on them is the only version of this test that can fail for the right reason.
+
+The obvious objection is that it breaks the moment a translation lands or a word is reworded,
+with a "node not found" message that says nothing useful. So the verification harness greps
+every literal the test declares against the project's `strings.xml` files and fails loudly if
+one is absent. Cheap, and it converts the failure mode from a confusing test error into a
+one-line diff.
+
+## 14.8 What this day does not prove
+
+Three tests were written today that cannot run in CI and have not run yet at all:
+`BeneficiaryDaoTest`, `MigrationTest` and the trigger assertions in both. They are instrumented,
+and 4.5 still keeps instrumented tests out of CI. Writing them was still worth it — they can be
+run on demand now, and before today they could not — but the honest statement is that the
+project's strongest claims moved from *untested* to *testable*, not to *continuously verified*.
+An instrumented CI lane is the remaining half and it is its own day.
+
+`CaptureToHistoryTest` does run in CI, and what it covers is narrower than "the UI works":
+
+- **Not rendering.** Robolectric runs the composition and the semantics tree, not a GPU. Overlapping
+  layout, clipped text, a touch target too small for a gloved thumb — none of it is visible.
+- **Not Room, and not SQLCipher.** The data layer is faked, for the reason in 14.3.
+- **Not WorkManager.** The scheduler is a no-op; whether a save requests a sync is asserted in
+  `SyncSchedulingTest`.
+
+What it does prove is the wiring, which is the one thing no unit test in this project can reach.
+
+---
 
 ## Open items
 
@@ -2132,36 +2347,41 @@ and only the second one is worth anything.
 | Cold-start numbers before/after Baseline Profile | Not yet measured | With the benchmark module |
 | MVI marker interfaces live in `:feature:patients/mvi` (5.1) | Deliberate — one consumer | Move to `:core:ui` at the second feature module |
 | ~~No Compose UI yet for either MVI screen~~ | **Resolved** — both screens built, `MainActivity` no longer renders the template (Part 6) | Closed |
+| ~~No end-to-end test: nothing asserts the module boundaries line up~~ | **Resolved** — `CaptureToHistoryTest` on Robolectric, so it runs in `./gradlew test` (14.1, 14.2). Covers the Hilt graph, nav on an effect, and the capture → list round trip | Closed |
 | ~~Theme lives in `:app` while `:core:designsystem` is empty~~ | **Resolved** — moved, with spacing tokens and `StatusChip` (6.1, 6.2) | Closed |
 | Validation bounds are stated twice: `BeneficiaryValidator` and `strings.xml` (6.8) | Accepted — the alternative is unlocalisable sentence fragments. Day 18 pinned the domain half with boundary tests, so a bound that moves now breaks a test; the string still has to be updated by hand | When the ranges next change |
 | ~~History list is a plain `LazyColumn`, not Paging~~ | **Resolved** — Paging 3 over Room (Part 7) | Closed |
-| No SQL is tested: the `CASE` ordering, the conditional updates, `INSERT OR IGNORE`, the append-only triggers and all four migrations (7.2, 7.6, 10.8, 11.3, 12.6) | All need a real database, so all need instrumentation, which CI does not run (4.5). The project's strongest claims have its weakest automated coverage | Day 20, or an instrumented CI lane |
+| ~~No SQL is tested: the `CASE` ordering, the conditional updates, `INSERT OR IGNORE`, the append-only triggers and all four migrations~~ | **Resolved as written, not as running** — `BeneficiaryDaoTest` and `MigrationTest` cover all of it (14.5, 14.6), including the fresh-install trigger path and a 1→4 chain carrying a PENDING record. Both are instrumented, so 4.5 still keeps them out of CI | An instrumented CI lane — the remaining half |
 | `CASE`-based ordering cannot use an index (7.2) | Correct at one health worker's scale | With the benchmark work, as an indexed rank column + backfill migration |
 | Paging's error/retry branch is unimplemented (7.3) | Still true, and the Day 12 prediction was wrong: the pull is a use case, not a `RemoteMediator` (9.4), so nothing in the Paging path ever touches the network and `LoadState.Error` stays unreachable | Only if paging ever becomes network-backed — otherwise never |
-| No test that the Worker maps the summaries to the right WorkManager Result (8.1, 9.8) | The algorithms are covered; the adapter — including "an interrupted push skips the pull" — is not | Days 18-20, with `work-testing` |
+| No test that the Worker maps the summaries to the right WorkManager Result (8.1, 9.8) | The algorithms are covered; the adapter — including "an interrupted push skips the pull" — is not. Named for Days 18-20 and not done in any of them | With `work-testing`, as its own piece of work |
 | A CONFLICTED record is a visible dead end — no merge UI (9.3) | Deliberate: detection without resolution loses nothing, and a wrong auto-merge is invisible | A field-level resolution screen, sized as its own day |
 | `MockRemoteBeneficiarySource` holds accepted records in memory only (8.7, 9.9) | Fine for a mock; a restart forgets the 'server' while the device keeps its cursor, so the next pull returns nothing until new pushes land | Stays a mock — stated scope boundary |
 | KMP variant split: domain compiles against `paging-common-desktop`, app ships `-android` (7.1) | Expected and routine | Watch for it if a NoSuchMethodError appears |
 | ~~No logging abstraction — classes call `android.util.Log` directly (6.4)~~ | **Resolved** — `Logger` in `:core:common`, Android implementation in `:app` (13.1). Forced by testability, not diagnostics: a class calling `android.util.Log` cannot have a JVM unit test | Closed |
 | Hand-rolled navigation (6.5) | Correct at two destinations | The first destination that takes an argument |
-| Room schema JSON for v2 and v3 is not committed; only `1.json` is in `core/data/schemas/` | Blocks the migration test that the exported schemas exist for | Commit them on the next `./gradlew` run |
-| No migration test for 1→2 or 2→3 | `MigrationTestHelper` needs instrumentation, which is out of CI (4.5) | Days 18-20, together with the `ORDER BY` test |
+| Room schema JSON for v2 and v3 is not committed; only `1.json` is in `core/data/schemas/` | **Now blocking.** `MigrationTest` exists and every test in it fails on a missing schema file until they do. A build exports only the *current* version, so they have to be recovered from git history — the recipe is in the test's KDoc. Hand-writing them is not an option: the JSON carries an identity hash Room computes from the entities | Before `MigrationTest` can run at all |
+| ~~No migration test for 1→2 or 2→3~~ | **Resolved** — every migration individually, the full chain, and a `DATABASE_VERSION - 1 == ALL_MIGRATIONS.size` drift guard (14.6) | Closed |
 | A server that expires cursors has no full-resync path (9.5) | `PullOutcome` has no "cursor too old" case; the mock never expires one | When there is a real backend with log compaction |
 | Deletes do not sync — no tombstones (9.1) | The app cannot delete a record, so the gap is not reachable today | With the first delete affordance |
 | A pull's server-side change arrives up to an hour late on an idle handset | The periodic pass is the only trigger when nothing is being captured | A push notification, which needs a real backend (4.2) |
 | An existing plaintext `astracare.db` will not open after Day 16 (10.9) | No released build, so only development devices are affected — uninstall and reinstall. The `sqlcipher_export` recipe is written down but not implemented | If a build is ever released before the next schema change |
 | The SQLCipher passphrase stays in heap for the life of the process (10.5) | `SupportOpenHelperFactory` keeps the array and offers no way to clear it; verified in the library source, not assumed | Nothing to do without a change upstream — it bounds the threat model rather than being a bug |
 | API 24-27 get no `setUnlockedDeviceRequired` (10.4) | The flag is API 28+. Those devices still get Keystore-bound encryption, just not the locked-device guarantee | Whenever minSdk rises to 28 |
-| `EncryptedDatabaseTest` is instrumented, so it is outside CI (4.5, 10.8) | The Keystore has no JVM implementation, so there is no Robolectric path either. The strongest test in the project does not run automatically | Days 18-20, with the migration and `ORDER BY` tests, if instrumented CI lands |
+| `EncryptedDatabaseTest` is instrumented, so it is outside CI (4.5, 10.8) | Unchanged, and it now has company: the migration and DAO tests written on Day 20 are instrumented too (14.8). The Keystore has no JVM implementation, so there is no Robolectric path for this one | An instrumented CI lane |
 | SQLCipher adds ~4MB of native library per ABI, unmeasured (10.1) | Accepted for the security it buys; no ABI split or app bundle configuration yet | With the benchmark work, alongside the cold-start numbers |
 | R8 is disabled — `optimization { enable = false }` in `app/build.gradle.kts` | Predates Day 16 and was not in its scope. A release build is therefore unshrunk and unobfuscated, and the modules' `keepRules` directories are unexercised | Its own day; enabling R8 blind on a Hilt + Room + Paging graph is not a ten-minute change |
 | The audit trail records a role, not a person (11.5) | There is no authentication, and the role is switchable by whoever holds the phone. `ROLE_CHANGED` makes tampering visible, not impossible | Server-side audit from an authenticated principal — needs a real backend (4.2) |
 | The audit write is not atomic with the save it describes (11.8) | A crash between them loses the entry and keeps the record, which is the right way round. A client-side transaction would make it reliable, not authoritative | With a server that records what it receives |
-| No migration test for 3→4, and the append-only triggers are untested (11.3) | The trigger path that a fresh install takes differs from the one an upgrade takes, and neither is covered. Room does not validate triggers, so nothing else would catch a regression | Days 18-20, with the other instrumented tests |
+| ~~No migration test for 3→4, and the append-only triggers are untested (11.3)~~ | **Resolved** — both paths: the migration one in `MigrationTest`, the fresh-install one in `BeneficiaryDaoTest` against a Room-built schema with the production callback (14.5) | Closed |
 | Client RBAC hides affordances and refuses actions; it secures nothing (4.3, 11.2) | Stated in the README and next to the code. The role is on the device and the device belongs to the user | Server-side authorisation on every request |
 | `audit_log` grows without bound and is never pruned | One line per save on a table nobody deletes from — and deletion is impossible by design (11.3), so pruning needs a deliberate mechanism rather than a `DELETE` | When a real deployment's volume is known; likely a server-side archive plus a local retention window |
 | DPDP: children's data attracts enhanced protections this app does not implement | Beneficiaries are children under five. Verifiable parental consent, and the consent notice and retention machinery around it, are absent | Out of scope for a portfolio build; named in the README rather than implied to be handled |
+| `CaptureToHistoryTest` asserts on UI string literals, not resources (14.7) | Deliberate: a test resolving the same resource as the screen passes when both are wrong. The harness greps every literal against `strings.xml`, so the failure is a one-line diff rather than "node not found" | Revisit when a `values-hi/` translation lands and the default locale stops being the only one |
+| Robolectric renders no pixels (14.8) | Composition and semantics only. Layout overlap, clipped text and undersized touch targets are invisible to `CaptureToHistoryTest` | Screenshot testing (Paparazzi or Roborazzi), as its own decision |
+| `app/src/sharedTest` is wired into both test source sets by hand | Not an AGP convention — two `kotlin.srcDir` lines in `app/build.gradle.kts`. A new module needing shared doubles repeats them | Move into a convention plugin at the second module that needs it |
+| Robolectric downloads an `android-all` runtime on first run | An offline or firewalled CI agent fails with a download error rather than a test failure. The SDK level is pinned below `compileSdk` for the same reason | Prefetch the runtime in the CI cache if it ever bites |
 | Mutation testing is a scratch script, not part of the build (12.5, 13.4) | Run by hand two days running, and it found a real gap both times — most recently a test asserting a *consequence* of idempotence rather than idempotence itself. Nothing in CI stops the next test from being one that cannot fail | Kotlin support in the available plugins is thin enough to be its own decision |
 | ~~`MockRemoteBeneficiarySource` is asserted only through its consumers (12.6)~~ | **Resolved** — 16 direct tests (13.2), unblocked by the logging seam | Closed |
-| The `Logger` seam could enforce the no-PII-in-logs rule and does not (10.10, 13.1) | Every call site is currently clean, checked by hand. One interface is now the single place a check could live | When there is a redaction requirement, or a crash reporter to route through |
-| `SyncBeneficiariesWorker` is the only `Logger` consumer with no test at all (9.8) | Its summary-to-`Result` mapping still needs `work-testing`; injecting the logger changed its constructor without making it testable | Day 20, or whenever `work-testing` lands |
+| The `Logger` seam could enforce the no-PII-in-logs rule *structurally* and does not (10.10, 13.1, 14.4) | Narrowed — `PiiLoggingTest` now drives the real paths with unmistakable PII and inspects the whole cause chain, so this is mechanical rather than a hand audit. It still proves the paths it drives, not every future call site; a typed or redacting `Logger` would | When there is a redaction requirement, or a crash reporter to route through |
+| `SyncBeneficiariesWorker` is the only `Logger` consumer with no test at all (9.8, 14.4, 14.8) | Still true after Day 20 — the UI test replaces its scheduler with a no-op, and `PiiLoggingTest` cannot construct it without WorkManager. Its summary-to-`Result` mapping needs `work-testing` | Whenever `work-testing` lands |

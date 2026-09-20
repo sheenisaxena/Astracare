@@ -45,6 +45,11 @@ junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 turbine = "1.2.1"
 mockk = "1.14.3"
+# Robolectric runs Android framework code on the JVM, which is what puts the one end-to-end
+# Compose test into CI rather than into a manual device run (DECISION_LOG 14.1). It ships a
+# prebuilt runtime per API level, so the level a test asks for must be one it has — see the
+# ROBOLECTRIC_SDK note in CaptureToHistoryTest for why that is pinned below compileSdk.
+robolectric = "4.17"
 
 # --- Static analysis ---
 # 1.23.8 is the latest STABLE detekt, but it is built against Kotlin 2.0.21 while this
@@ -143,6 +148,7 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
