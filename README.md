@@ -5,9 +5,10 @@
 An offline-first Android field data capture app for community health workers operating in
 low-bandwidth and intermittently connected environments.
 
-> **Status: in active development.** The build system, module architecture and dependency
-> graph are in place. Feature work is underway — see [Current state](#current-state) for an
-> honest breakdown of what does and does not exist yet.
+> **Status: in active development.** The app captures records, stores them in an encrypted
+> local database, syncs them in the background with conflict detection, and logs what happened
+> to an append-only trail. See [Current state](#current-state) for what exists and
+> [Deliberate scope boundaries](#deliberate-scope-boundaries) for what deliberately never will.
 
 ---
 
@@ -27,100 +28,103 @@ That makes three things non-negotiable:
 - **Data at rest is sensitive.** Records contain personally identifying health information, so
   field-level encryption and an audit trail are requirements rather than enhancements.
 
+## Screens
+
+<!--
+  Recording pending. To capture, with a device attached:
+
+    adb shell screenrecord --time-limit 20 --size 720x1560 /sdcard/capture.mp4
+    adb pull /sdcard/capture.mp4 .
+    ffmpeg -i capture.mp4 -vf "fps=12,scale=360:-1:flags=lanczos,split[a][b];\
+      [a]palettegen[p];[b][p]paletteuse" -loop 0 docs/media/capture-to-history.gif
+
+  Then drop the files in docs/media/ and uncomment:
+
+  | Capture | History | Audit trail |
+  |---|---|---|
+  | ![Capture](docs/media/capture.png) | ![History](docs/media/history.png) | ![Audit](docs/media/audit.png) |
+
+  ![Capture to history](docs/media/capture-to-history.gif)
+-->
+
+Screen recordings are not in the repository yet. The journey they would show — capture a record,
+watch it save locally and appear in the history list marked *Pending* — is covered end to end by
+`CaptureToHistoryTest`, which runs on every `./gradlew test`.
+
 ## Architecture
 
 Multi-module, layered, with unidirectional data flow.
 
-```
-                         :app
-                          │
-        ┌─────────────────┼──────────────────┐
-        ▼                 ▼                  ▼
-:feature:patients    :core:sync      :core:designsystem
-        │                 │
-        └────────┬────────┘
-                 ▼
-            :core:data          ← Room + remote source + repository impls
-                 │
-                 ▼
-           :core:domain         ← use cases + repository interfaces
-                 │
-        ┌────────┴────────┐
-        ▼                 ▼
-   :core:model       :core:common
-```
+![Module dependency graph](docs/architecture.svg)
 
 | Module | Type | Responsibility |
 |---|---|---|
-| `:app` | Android application | Entry point, Hilt root component, navigation host |
-| `:feature:patients` | Android library | Capture screen, record history, MVI ViewModel |
-| `:core:sync` | Android library | WorkManager sync engine, backoff, conflict resolution |
-| `:core:data` | Android library | Room database, remote source, repository implementations |
+| `:app` | Android application | Entry point, Hilt root component, navigation shell |
+| `:feature:patients` | Android library | Capture screen, record history, MVI ViewModels |
+| `:core:designsystem` | Android library | Compose Material 3 theme and shared components |
+| `:core:sync` | Android library | WorkManager sync engine, backoff, conflict detection |
+| `:core:data` | Android library | Room + SQLCipher, mock remote, repository implementations |
 | `:core:domain` | **Kotlin/JVM** | Use cases and repository *interfaces* |
 | `:core:model` | **Kotlin/JVM** | Pure domain models |
-| `:core:common` | **Kotlin/JVM** | Dispatchers, result types, shared extensions |
-| `:core:designsystem` | Android library | Compose Material 3 theme and shared components |
+| `:core:common` | **Kotlin/JVM** | `Outcome`, dispatchers, `Logger`, shared extensions |
+| `:macrobenchmark` | Android test | Cold-start measurement and baseline profile generation |
 
-`:core:domain`, `:core:model` and `:core:common` are **Kotlin/JVM modules, not Android
-modules**. The Android SDK is not on their compile classpath, so an `import android.*` in the
-domain layer does not compile. Layering is enforced by the build rather than by code review.
+Three things in that graph are deliberate and worth naming:
+
+- **`:core:domain`, `:core:model` and `:core:common` are Kotlin/JVM modules, not Android
+  modules.** The Android SDK is not on their compile classpath, so an `import android.*` in the
+  domain layer is a compile error rather than a review comment.
+- **Nothing in the UI column depends on `:core:data`.** The feature layer talks to repository
+  *interfaces* in `:core:domain`; the implementations sit beside it, not beneath it. Swapping
+  Room for something else touches one module.
+- **`:app` depends on `:core:data` and `:core:sync` without naming a single type from either.**
+  Both are there purely so their Hilt `@Binds` reach the runtime classpath when the singleton
+  component is assembled. The dashed arrows in the diagram are that relationship.
 
 The same principle drives the Gradle setup: convention plugins are split by capability, so
 Compose and Hilt are simply absent from modules that should not use them.
 
+## Read this repo in ten minutes
+
+If you are reviewing this and want the signal without reading eight modules:
+
+1. **[docs/DECISION_LOG.md](docs/DECISION_LOG.md)** — the point of the project. Every structural
+   choice with the alternative that was rejected and why. Start at Part 9 (conflict resolution)
+   or Part 10 (encryption) if you only read one.
+2. **`core/domain/.../sync/ConflictResolver.kt`** — the hardest logic in the app, and the one
+   place where "offline-first" stops being a slogan. Conflict detection keys on sync status,
+   never on comparing clocks.
+3. **`core/data/.../crypto/DatabasePassphrase.kt`** — Keystore-wrapped SQLCipher passphrase,
+   including what happens when the key is gone but the encrypted blob is not.
+4. **`app/src/test/.../CaptureToHistoryTest.kt`** — the end-to-end journey, and the two real
+   bugs it found on its first run (DECISION_LOG 14.9 and 14.10).
+5. **`build-logic/`** — eight convention plugins, SDK and Java levels defined once.
+
 ## Stack
 
-Kotlin · Jetpack Compose · Material 3 · Hilt · Room · WorkManager · Paging 3 · Coroutines &
-Flow · KSP · Turbine · MockK · Gradle convention plugins
+Kotlin · Jetpack Compose · Material 3 · Hilt · Room · SQLCipher · WorkManager · Paging 3 ·
+Coroutines & Flow · KSP · JUnit · Turbine · MockK · Robolectric · Macrobenchmark · detekt ·
+Gradle convention plugins
 
-**Build requirements:** JDK 21 · Gradle 9.5 · AGP 9.3.1 · `compileSdk` 37 · `minSdk` 24
-
-`JAVA_HOME` must point at that JDK as an **OS-level environment variable**, not only inside the
-IDE. Android Studio's Gradle JDK setting (Settings → Build Tools → Gradle → Gradle JDK) is
-internal to Studio, so a build started from the IDE succeeds while the git hooks below fail with
-`JAVA_HOME is not set and no 'java' command could be found in your PATH` — hooks run `./gradlew`
-in a plain shell that never sees that setting. `org.gradle.java.home` does not cover this either:
-it selects the JDK for the Gradle daemon, but the wrapper needs a JVM before it can read it.
-
-```bash
-# macOS / Linux — in ~/.zshenv (not ~/.zshrc), so non-interactive shells inherit it too
-export JAVA_HOME="$(/usr/libexec/java_home -v 21)"   # Linux: e.g. /usr/lib/jvm/temurin-21-jdk
-
-"$JAVA_HOME/bin/java" -version                       # verify — must report 21
-```
-
-```powershell
-# Windows — user-level; restart Android Studio and any open terminals afterwards
-[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Program Files\Eclipse Adoptium\jdk-21','User')
-```
-
-Android Studio's bundled runtime (`<studio>/jbr`) works as a fallback if its `java -version`
-reports 21, but it moves on Studio updates — a standalone JDK is the more stable target.
+## Build and run
 
 ```bash
 ./gradlew assembleDebug
-./gradlew test                   # includes the Robolectric end-to-end UI test
-./gradlew connectedDebugAndroidTest   # migration, DAO and encryption tests; needs a device
-./gradlew detekt                 # static analysis + ktlint rules
-./gradlew :macrobenchmark:connectedBenchmarkAndroidTest   # cold start; physical device only
-./gradlew detekt --auto-correct  # fix what can be fixed automatically
+./gradlew test       # unit tests + the Robolectric end-to-end UI test
+./gradlew detekt     # static analysis + ktlint, maxIssues = 0
 ```
 
-Git hooks (detekt on commit, tests on push) install themselves on the first Gradle sync — no
-setup command needed. Git never clones `.git/config`, so `core.hooksPath` cannot survive a
-clone on its own; `settings.gradle.kts` sets it during configuration instead.
+JDK 21 · Gradle 9.5 · AGP 9.3.1 · `compileSdk` 37 · `minSdk` 24.
 
-To verify, or to set it by hand:
-
-```bash
-git config core.hooksPath   # should print .githooks
-```
+**[docs/BUILDING.md](docs/BUILDING.md)** covers environment setup — including the `JAVA_HOME`
+requirement that makes the git hooks fail while the IDE build succeeds — the instrumented and
+benchmark commands, and the known tooling gaps.
 
 ## Current state
 
 **In place**
 
-- Seven-module structure with compiler-enforced layer boundaries
+- Eight-module structure with compiler-enforced layer boundaries, plus `:macrobenchmark`
 - `build-logic` included build with eight capability-scoped convention plugins; SDK and Java
   levels defined once
 - Version catalog covering the full dependency set

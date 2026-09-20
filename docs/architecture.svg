@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 660" width="900" height="660"
+     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+     role="img" aria-label="AstraCare module dependency graph: :app depends on a UI group and an infrastructure group, both of which depend on :core:domain, which depends on the Kotlin/JVM foundation modules :core:model and :core:common." xmlns:c2pa="http://c2pa.org/manifest"><metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTo3ZGIzMmQxMi1jOTQ5LTQxYjAtOTE2OC1iZDJjNDdkMThjYjUAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaAQpQarChkVOgodymBqxZwcAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDoxN2MyNzhkMi1mN2E3LTQ1OWUtYTg1OS05NDliMTUzMDM1MzNscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNo0ickH4Il367glIe71fPmXQAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggeWLFk2J9TIyPP3cmkA+YmLpO31UxBv8Cmnr2edzF8jqkZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaB+Hxkp9aRpjaNYdcczWERIAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRMAAAAAAAAAAAAAAAAZGhhc2hYIBSeHxxMalSMpnRzSBNeEEzOaxVQLdqGL2Y6odCRQ182ZG5hbWVuanVtYmYgbWFuaWZlc3RqZXhjbHVzaW9uc4GiZXN0YXJ0GQHkZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjdkYjMyZDEyLWM5NDktNDFiMC05MTY4LWJkMmM0N2QxOGNiNS9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOmJkOWRhZjBhLTEyOGEtNDQyNy1hZWQ5LTZlNDVjOWVlMzMwZHJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCB5YsWTYn1MjI8/dyaQD5iYuk7fVTEG/wKaevZ53MXyOqJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggguuladwO3D0QNrDi7s1pf93UY4Zd00hhxiI6dqQgk6KiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggel6AmA+gA14F+Q61tL08A2TS0HIj6q+r2dmDMiFB+xB0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQDFT/+HbunaV1DXD6IXN8k8GXFU9BY+OWjGDGmACH2xk+xt6O1VRsVMuXmSIGAE/Ou5L6lD8Vohh/04p3JwyBqc=</c2pa:manifest></metadata>
+
+  <style>
+    :root { color-scheme: light dark; }
+    .bg     { fill: #ffffff; }
+    .ink    { fill: #1f2328; }
+    .muted  { fill: #57606a; }
+    .box    { fill: #f6f8fa; stroke: #d0d7de; }
+    .app    { fill: #dafbe1; stroke: #4ac26b; }
+    .jvm    { fill: #ddf4ff; stroke: #54aeff; }
+    .bench  { fill: #f6f8fa; stroke: #afb8c1; }
+    .group  { fill: none;    stroke: #d0d7de; }
+    .edge   { stroke: #57606a; }
+    .rule   { stroke: #54aeff; }
+    .head   { fill: #57606a; }
+
+    @media (prefers-color-scheme: dark) {
+      .bg     { fill: #0d1117; }
+      .ink    { fill: #e6edf3; }
+      .muted  { fill: #9198a1; }
+      .box    { fill: #161b22; stroke: #3d444d; }
+      .app    { fill: #0f2e19; stroke: #3fb950; }
+      .jvm    { fill: #0c2d6b; stroke: #4493f8; }
+      .bench  { fill: #161b22; stroke: #3d444d; }
+      .group  { fill: none;    stroke: #3d444d; }
+      .edge   { stroke: #9198a1; }
+      .rule   { stroke: #4493f8; }
+      .head   { fill: #9198a1; }
+    }
+
+    text   { font-size: 13px; }
+    .name  { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; }
+    .role  { font-size: 11px; }
+    .tag   { font-size: 10.5px; letter-spacing: .06em; }
+    rect   { stroke-width: 1.4; }
+    .edge  { fill: none; stroke-width: 1.6; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="900" height="660"/>
+
+  <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="7" orient="auto-start-reverse">
+    <path class="head" d="M0 0 L10 4 L0 8 z"/>
+  </marker>
+
+  <text class="ink" x="24" y="34" font-size="16" font-weight="600">AstraCare — module dependencies</text>
+  <text class="muted role" x="24" y="54">Arrows point from dependent to dependency. Dashed = present on the runtime classpath only.</text>
+
+  <!-- ── application row ───────────────────────────────────────────── -->
+  <rect class="app" x="375" y="76" width="150" height="48" rx="7"/>
+  <text class="ink name" x="450" y="99" text-anchor="middle">:app</text>
+  <text class="muted role" x="450" y="114" text-anchor="middle">entry point · Hilt root</text>
+
+  <rect class="bench" x="40" y="76" width="200" height="48" rx="7" stroke-dasharray="5 4"/>
+  <text class="ink name" x="140" y="99" text-anchor="middle">:macrobenchmark</text>
+  <text class="muted role" x="140" y="114" text-anchor="middle">separate process · drives :app</text>
+  <path class="edge" d="M240 100 H366" stroke-dasharray="5 4" marker-end="url(#a)"/>
+
+  <!-- ── UI group ──────────────────────────────────────────────────── -->
+  <rect class="group" x="90" y="168" width="250" height="152" rx="9" stroke-dasharray="3 4"/>
+  <text class="muted tag" x="104" y="186">UI</text>
+
+  <rect class="box" x="112" y="196" width="206" height="48" rx="7"/>
+  <text class="ink name" x="215" y="219" text-anchor="middle">:feature:patients</text>
+  <text class="muted role" x="215" y="234" text-anchor="middle">capture · history · MVI</text>
+
+  <rect class="box" x="112" y="258" width="206" height="48" rx="7"/>
+  <text class="ink name" x="215" y="281" text-anchor="middle">:core:designsystem</text>
+  <text class="muted role" x="215" y="296" text-anchor="middle">theme · shared components</text>
+
+  <path class="edge" d="M215 244 V258" marker-end="url(#a)"/>
+
+  <!-- ── infrastructure group ──────────────────────────────────────── -->
+  <rect class="group" x="560" y="168" width="250" height="152" rx="9" stroke-dasharray="3 4"/>
+  <text class="muted tag" x="574" y="186">INFRASTRUCTURE</text>
+
+  <rect class="box" x="582" y="196" width="206" height="48" rx="7"/>
+  <text class="ink name" x="685" y="219" text-anchor="middle">:core:sync</text>
+  <text class="muted role" x="685" y="234" text-anchor="middle">WorkManager · push, pull, conflict</text>
+
+  <rect class="box" x="582" y="258" width="206" height="48" rx="7"/>
+  <text class="ink name" x="685" y="281" text-anchor="middle">:core:data</text>
+  <text class="muted role" x="685" y="296" text-anchor="middle">Room + SQLCipher · mock remote</text>
+
+  <!-- app -> groups -->
+  <path class="edge" d="M415 124 V146 H215 V167" marker-end="url(#a)"/>
+  <path class="edge" d="M485 124 V146 H685 V167" stroke-dasharray="5 4" marker-end="url(#a)"/>
+  <text class="muted role" x="876" y="140" text-anchor="end">Hilt bindings only</text>
+
+  <!-- groups -> domain -->
+  <path class="edge" d="M215 320 V340 H420 V372" marker-end="url(#a)"/>
+  <path class="edge" d="M685 320 V340 H480 V372" marker-end="url(#a)"/>
+
+  <!-- ── the compiler-enforced line ────────────────────────────────── -->
+  <path class="rule" d="M24 360 H876" stroke-width="1.2" stroke-dasharray="2 5"/>
+  <text class="muted tag" x="24" y="355">NO android.* ON THE CLASSPATH BELOW THIS LINE</text>
+
+  <!-- ── domain ────────────────────────────────────────────────────── -->
+  <rect class="jvm" x="345" y="374" width="210" height="52" rx="7"/>
+  <text class="ink name" x="450" y="398" text-anchor="middle">:core:domain</text>
+  <text class="muted role" x="450" y="414" text-anchor="middle">use cases · repository interfaces</text>
+
+  <!-- ── foundation ────────────────────────────────────────────────── -->
+  <rect class="jvm" x="175" y="486" width="200" height="52" rx="7"/>
+  <text class="ink name" x="275" y="510" text-anchor="middle">:core:model</text>
+  <text class="muted role" x="275" y="526" text-anchor="middle">domain types</text>
+
+  <rect class="jvm" x="525" y="486" width="200" height="52" rx="7"/>
+  <text class="ink name" x="625" y="510" text-anchor="middle">:core:common</text>
+  <text class="muted role" x="625" y="526" text-anchor="middle">Outcome · dispatchers · Logger</text>
+
+  <path class="edge" d="M400 426 V458 H275 V485" marker-end="url(#a)"/>
+  <path class="edge" d="M500 426 V458 H625 V485" marker-end="url(#a)"/>
+  <path class="edge" d="M524 512 H376" marker-end="url(#a)"/>
+
+  <!-- ── legend ────────────────────────────────────────────────────── -->
+  <rect class="group" x="24" y="574" width="852" height="62" rx="9"/>
+
+  <rect class="app" x="44" y="592" width="26" height="18" rx="4"/>
+  <text class="muted role" x="78" y="605">application</text>
+
+  <rect class="box" x="168" y="592" width="26" height="18" rx="4"/>
+  <text class="muted role" x="202" y="605">Android library</text>
+
+  <rect class="jvm" x="306" y="592" width="26" height="18" rx="4"/>
+  <text class="muted role" x="340" y="605">Kotlin/JVM — Android SDK absent, so the layering is a compile error, not a review comment</text>
+</svg>
