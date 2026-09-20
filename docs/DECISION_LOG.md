@@ -2518,6 +2518,131 @@ iteration count and commit beside them. A number without those four is not a mea
 the point of writing the file before the run is that the blanks are visible.
 
 ---
+---
+
+# Part 16 — A baseline profile, and refusing to let it report a number it did not earn
+
+Day 22. The plan: *"Generate Baseline Profile via `BaselineProfileRule`. Re-measure cold start.
+Record the before/after delta in a table."*
+
+Day 21 built the instrument and wrote down what it would and would not prove. This day builds
+the thing being measured. Almost every decision below is about the same risk — that a baseline
+profile produces a number whether or not it did anything, and that the number is flattering.
+
+## 16.1 What a baseline profile is, since the name oversells it
+
+A text file of method signatures. `BaselineProfileRule` drives the app while ART records which
+methods ran; the list is packaged into the APK, and at install time the runtime compiles those
+methods ahead of time instead of interpreting them on first launch.
+
+There is no measurement in it and nothing adaptive. It is a hint about which code matters, and
+its quality is entirely a function of what the generating journey touched.
+
+Saying so plainly is not pedantry — it is what makes the next decision obvious.
+
+## 16.2 The journey goes past startup, because a startup-only profile makes the first tap slow
+
+The obvious generator launches the app and stops. It produces a profile that makes launching
+fast and leaves the first interaction exactly as slow as it was — which a user experiences as
+"it opens instantly and then hangs". That is a *worse* impression than a uniformly slow app,
+because the fast launch sets an expectation the next screen breaks.
+
+So `BaselineProfileGenerator` does the whole first minute of a health worker's day: cold launch,
+wait for the list to actually settle, open the capture form, come back. That pulls in the MVI
+loop, the validator, the draft repository and a second screen of Compose — none of which a
+launch-only profile would have named.
+
+Two details inside it are worth recording:
+
+**It waits for content, not for a duration.** Until Paging's refresh lands, the only thing
+composed is a spinner, and a profile collected at that moment faithfully records the code path
+for showing a loading indicator. This is the same race Day 20's UI test lost on its first run
+(14.10), in a different harness, three days apart — which is a good argument that the race is a
+property of this app's startup rather than of either test.
+
+**It finds the button by content description.** Because `ExtendedFloatingActionButton` clears
+its label's semantics, and the description only exists because the UI test found it missing
+(14.9). An accessibility fix made two days ago is what makes the profile generator able to find
+the primary action at all. That is not a coincidence worth marvelling at — UiAutomator and a
+screen reader consume the same tree, so anything unreachable by one is unreachable by the other.
+
+## 16.3 `BaselineProfileMode.Require`, because `UseIfAvailable` cannot fail
+
+The measuring test uses `CompilationMode.Partial(BaselineProfileMode.Require)`.
+
+`UseIfAvailable` is the friendlier-sounding option and it is the wrong one. When no profile is
+installed it runs anyway, reports a number indistinguishable in shape from a real one, and the
+before/after table then compares `None` against `None`. The result is a 0% improvement written
+up as a measurement — or, worse, run-to-run noise written up as a win, in complete good faith,
+by someone who had no way to know.
+
+`Require` fails the test. That is the only behaviour of the two that cannot produce a false
+result, and "fails loudly" beats "reports something" every time the something would be indistinguishable from the truth.
+
+## 16.4 `profileinstaller` is not optional, and leaving it out fails silently
+
+`androidx.profileinstaller` is now a dependency of `:app`.
+
+It is easy to skip, because on a Play-installed app the store performs install-time compilation
+from the packaged profile without it. Every device this project will ever touch is sideloaded —
+a benchmark run, a reviewer's phone, a field pilot APK — and on those the profile sits in the
+APK doing nothing unless this library writes it to ART.
+
+Omitting it is the standard way to ship a baseline profile that has no effect and then measure
+it as though it did. Combined with `UseIfAvailable` above, the two mistakes compose into a
+convincing, entirely fictional improvement.
+
+## 16.5 The profile is a committed text file, not a generated build artifact
+
+The modern path is the `androidx.baselineprofile` Gradle plugin: it runs the generator, collects
+the output, and wires it into the app automatically, creating `nonMinifiedRelease` and
+`benchmarkRelease` variants to do it.
+
+This project instead commits `app/src/main/baseline-prof.txt`, the mechanism AGP has packaged
+since 7.x, and regenerates it by hand.
+
+Two reasons, one honest about its limits:
+
+**It is reviewable.** The whole thesis of this repository is that decisions are inspectable —
+that is what `DECISION_LOG.md` is for. A profile that lives in git as a readable list of the
+methods this app compiles ahead of time fits that; one that materialises during a build the
+reader cannot run does not.
+
+**The plugin would have churned Day 21's work on Day 22.** It auto-creates its own build types
+derived from `release`, which overlaps the hand-written `benchmark` type built yesterday for
+exactly this purpose, and I could not verify the interaction — AGP 9.3.1 is new enough that its
+managed-variant behaviour is not something to adopt blind on the day the measurement is taken.
+
+The cost is real and goes in the open items: the file can go stale. A profile generated against
+a UI that has since changed is worse than no profile, because it compiles methods that are no
+longer on the startup path while missing the ones that are — and nothing in the build will say
+so. Adopting the plugin is the follow-up, on a day where a broken build is affordable.
+
+## 16.6 What "faster" is allowed to mean here
+
+The table in `docs/PERFORMANCE.md` records **share of available headroom**:
+
+```
+share = (TTFD_None − TTFD_Partial) / (TTFD_None − TTFD_Full)
+```
+
+This is why Day 21 measured two bounds instead of one. "30% faster than no compilation at all"
+is technically true of almost any profile and says nothing about whether the profile is good;
+the same 30% is excellent against a large gap and meaningless against a small one.
+
+And the case that has to be written down *before* the run, or it will not survive contact with
+a disappointing result: **if the measured delta falls inside the run-to-run spread of the `None`
+row, the entry in the table is "no measurable improvement on this device".** An eight-module app
+with a Hilt graph and Compose has real startup work to compile, so an improvement is expected —
+but an expectation is not evidence, and a measurement that can only come out one way was never
+a measurement.
+
+**Concept — the integrity of a benchmark is decided before it runs**, by what the harness is
+allowed to report. Every choice on this day (`Require` over `UseIfAvailable`, two bounds over
+one, the pre-committed null result) is the same move: removing the ways a number could look
+like a win without being one.
+
+---
 
 ## Open items
 
@@ -2529,7 +2654,7 @@ the point of writing the file before the run is that the blanks are visible.
 | `android.disallowKotlinSourceSets=false` required — KSP registers generated sources via `kotlin.sourceSets`, which AGP 9 rejects (3.5) | Third-party tooling gap | When KSP supports AGP 9 built-in Kotlin |
 | ~~Conflict-resolution strategy (last-write-wins vs vector clocks)~~ | **Resolved** — neither: detection keyed on `SyncStatus`, no clock comparison (9.1) | Closed |
 | ~~SQLCipher vs Jetpack Security for field-level encryption~~ | **Resolved** — SQLCipher over the whole database (10.1); Jetpack Security turned out to be deprecated (10.2) | Closed |
-| Cold-start numbers before/after Baseline Profile | Instrument built (Part 15); the "before" reading is pending a physical device. `docs/PERFORMANCE.md` holds the method and the empty table | Day 21 run, then Day 22 for the "after" |
+| Cold-start numbers before/after Baseline Profile | Both halves built — instrument (Part 15) and profile (Part 16). Neither reading taken: it needs a phone, and `Partial(Require)` will fail until a generated profile is committed | One device session: generate, commit the profile, run all three modes |
 | MVI marker interfaces live in `:feature:patients/mvi` (5.1) | Deliberate — one consumer | Move to `:core:ui` at the second feature module |
 | ~~No Compose UI yet for either MVI screen~~ | **Resolved** — both screens built, `MainActivity` no longer renders the template (Part 6) | Closed |
 | ~~No end-to-end test: nothing asserts the module boundaries line up~~ | **Resolved** — `CaptureToHistoryTest` on Robolectric, so it runs in `./gradlew test` (14.1, 14.2). Covers the Hilt graph, nav on an effect, and the capture → list round trip | Closed |
@@ -2566,6 +2691,9 @@ the point of writing the file before the run is that the blanks are visible.
 | Robolectric renders no pixels (14.8) | Composition and semantics only. Layout overlap, clipped text and undersized touch targets are invisible to `CaptureToHistoryTest` | Screenshot testing (Paparazzi or Roborazzi), as its own decision |
 | `app/src/sharedTest` is wired into both test source sets by hand | Not an AGP convention — two `kotlin.srcDir` lines in `app/build.gradle.kts`. A new module needing shared doubles repeats them | Move into a convention plugin at the second module that needs it |
 | Robolectric downloads an `android-all` runtime on first run | An offline or firewalled CI agent fails with a download error rather than a test failure. The SDK level is pinned below `compileSdk` for the same reason | Prefetch the runtime in the CI cache if it ever bites |
+| `app/src/main/baseline-prof.txt` is regenerated by hand (16.5) | Deliberate over the `androidx.baselineprofile` plugin: the profile stays a reviewable file in git, and the plugin's auto-created variants overlap the `benchmark` build type written the day before. The cost is that the file can go stale silently — a profile against a changed UI compiles the wrong methods and nothing in the build says so | Adopt the plugin on a day where a broken build is affordable |
+| Profile generation needs API 33+, or root below it | ART only exposes its recorded profile without root from 33 onwards. `docs/PERFORMANCE.md` carries the Gradle Managed Device fallback, which is legitimate here because a profile is a list of method names rather than a timing | Nothing to do; the fallback is written down |
+| No baseline profile committed yet, so `coldStartBaselineProfile` fails | Correct behaviour, not a defect: `BaselineProfileMode.Require` refuses to report a number when there is no profile, which is the entire point of choosing it over `UseIfAvailable` (16.3) | Generate and commit the profile |
 | Benchmarks are outside CI and always will be (15.1) | Deliberate, unlike the Day 20 instrumented tests. A benchmark's output is a number, and a number from shared CI hardware is a number about that hardware | Never — re-run by hand after any change to startup, the Hilt graph or the database open path |
 | The `benchmark` build type shares `:app`'s application id (15.2) | Required: the benchmark drives `com.astracare` by name, and a suffix would mean two installs and an ambiguous target. The cost is that it replaces a development install | Nothing to do; noted so the replaced install is not a surprise |
 | `ReportDrawnWhen` puts an Activity API in a feature module (15.4) | Accepted — the screen is the only thing that knows when it is ready, and the alternative couples the navigation shell to one screen's load state | Revisit if a second screen ever needs to report readiness |

@@ -38,6 +38,11 @@ android {
 
 dependencies {
     implementation(libs.androidx.benchmark.macro.junit4)
+    // BaselineProfileGenerator names By, Until and UiDevice. These arrive transitively through
+    // benchmark-macro, but a module that references a type should depend on it — otherwise the
+    // day benchmark-macro stops exposing UiAutomator, this module breaks for a reason that has
+    // nothing to do with any line in it.
+    implementation(libs.androidx.uiautomator)
 }
 
 // Benchmarks are not part of `check`. They need a physical device, take minutes, and produce

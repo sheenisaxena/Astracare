@@ -135,12 +135,15 @@ git config core.hooksPath   # should print .githooks
   that no personally identifying information reaches the log
 - Instrumented tests for every migration, the `CASE` ordering, the conditional writes and the
   append-only triggers — written, and runnable on demand rather than in CI
-- `:macrobenchmark` module measuring cold start against both compilation bounds, with
+- `:macrobenchmark` module measuring cold start against three compilation modes, with
   `reportFullyDrawn` wired so the metric is the frame carrying records rather than the spinner
+- Baseline profile generator covering launch *and* the first interaction, with
+  `BaselineProfileMode.Require` so a missing profile fails the run instead of quietly
+  reporting an unimproved number as an improvement
 
 **Next**
 
-- Baseline Profile, and the before/after delta as a share of the measured headroom
+- Take both readings on a phone and fill in [docs/PERFORMANCE.md](docs/PERFORMANCE.md)
 - An instrumented CI lane, so the database tests run on every push rather than on request
 - R8 enabled for release builds
 

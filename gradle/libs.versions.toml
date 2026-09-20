@@ -35,6 +35,14 @@ sqlcipher = "4.19.0"
 # entirely — in which case nothing else would bring it.
 sqlite = "2.7.0"
 benchmark = "1.4.1"
+# Installs the packaged baseline profile on first run. NOT optional: without it the profile is
+# delivered only by Play Store install-time compilation, which means it never applies to a
+# sideloaded build, a benchmark, or any of the devices this app is actually destined for.
+profileinstaller = "1.4.1"
+# UiAutomator drives the app from outside its process during profile generation. Named
+# explicitly rather than taken transitively from benchmark-macro, because
+# BaselineProfileGenerator references By and UiDevice directly.
+uiautomator = "2.3.0"
 
 # --- Kotlin libraries ---
 coroutines = "1.11.0"
@@ -135,6 +143,8 @@ androidx-sqlite = { group = "androidx.sqlite", name = "sqlite", version.ref = "s
 
 # --- Performance ---
 androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmark" }
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
+androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 
 # --- Coroutines ---
 coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }

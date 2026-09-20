@@ -8,11 +8,45 @@ without all three.
 
 ## Method
 
+Two steps, in this order. The profile has to exist before the run that measures it.
+
 ```bash
+# 1. Generate the baseline profile (API 33+ device, or see "If your device is below API 33")
+./gradlew :macrobenchmark:connectedBenchmarkAndroidTest \
+    -Pandroid.testInstrumentationRunnerArguments.class=com.astracare.macrobenchmark.BaselineProfileGenerator
+
+# 2. Copy the generated profile into the app, then rebuild
+#    Output: macrobenchmark/build/outputs/managed_device_android_test_additional_output/
+#            (or .../connected/<device>/ for a connected run)
+#    Destination: app/src/main/baseline-prof.txt
+
+# 3. Measure — all three compilation modes
 ./gradlew :macrobenchmark:connectedBenchmarkAndroidTest
 ```
 
-Requires a **physical device**, API 29 or higher, connected and unlocked.
+Requires a **physical device**, API 29 or higher for measurement, connected and unlocked.
+Profile *generation* additionally needs API 33+, or root below that.
+
+### If your device is below API 33
+
+Generate on a Gradle Managed Device instead. A profile is a list of method names, so an
+emulator produces the same one a phone would — see the note under "Why not an emulator", which
+applies to timings and not to this. Add to `macrobenchmark/build.gradle.kts`:
+
+```kotlin
+android {
+    testOptions.managedDevices.allDevices {
+        create<com.android.build.api.dsl.ManagedVirtualDevice>("pixel6Api34") {
+            device = "Pixel 6"
+            apiLevel = 34
+            systemImageSource = "aosp"   // aosp, not google — no Play Store, so no interference
+        }
+    }
+}
+```
+
+then run `:macrobenchmark:pixel6Api34BenchmarkAndroidTest` for step 1 only. Step 3 still needs
+the phone.
 
 ### Why not an emulator
 
@@ -81,13 +115,31 @@ Derived:
 
 ### Run 2 — with a baseline profile (Day 22)
 
-_To be filled after Day 22._
+Same device, same commit, same session as Run 1 wherever possible. Comparing a profiled run
+on a warm phone against an unprofiled run on a cold one measures the phone.
+
+Profile: `app/src/main/baseline-prof.txt` · lines: _(count)_ · generated: _(YYYY-MM-DD)_
 
 | Compilation | TTFD median | Δ vs `None` | Share of available headroom |
 |---|---|---|---|
 | `None` | | — | — |
 | `Partial` (baseline profile) | | | |
 | `Full` | | | 100% |
+
+**Share of available headroom** is the honest figure, and the reason Run 1 measured two bounds:
+
+```
+share = (TTFD_None − TTFD_Partial) / (TTFD_None − TTFD_Full)
+```
+
+A profile recovering 70% of a 300 ms gap is a good profile. A profile recovering 70% of a 20 ms
+gap is noise. Quoting only "Δ vs None" cannot distinguish them, which is how an honest person
+ends up writing an unfalsifiable number on a CV.
+
+If the measured Δ is within the run-to-run spread of Run 1's `None` row, the correct conclusion
+is **"no measurable improvement on this device"** — and that goes in the table. An app with
+eight modules, a Hilt graph and Compose has real startup work to compile, so an improvement is
+expected; but the expectation is not evidence, and the table records what happened.
 
 ---
 

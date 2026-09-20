@@ -87,6 +87,16 @@ dependencies {
     implementation(libs.work.runtime.ktx)
     implementation(libs.androidx.hilt.work)
 
+    // Day 22. Installs the packaged baseline profile on first run.
+    //
+    // Easy to mistake for optional, because on a Play-installed app the store performs
+    // install-time compilation from the profile without it. Every device this project will
+    // ever run on is sideloaded — a benchmark run, a reviewer's phone, a field pilot APK — and
+    // on those the profile is inert unless this library writes it to ART. Leaving it out is
+    // the standard way to ship a baseline profile that does nothing and measure it as though
+    // it did.
+    implementation(libs.androidx.profileinstaller)
+
     // Day 20. The convention plugins put the Compose test artifacts and Hilt's test support
     // on `androidTestImplementation` only, because until now every UI test was instrumented.
     // These four lines are what move that capability to the JVM side, and they are declared

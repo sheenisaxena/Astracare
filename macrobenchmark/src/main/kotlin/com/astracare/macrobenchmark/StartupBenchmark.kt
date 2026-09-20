@@ -1,5 +1,6 @@
 package com.astracare.macrobenchmark
 
+import androidx.benchmark.macro.BaselineProfileMode
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.StartupTimingMetric
@@ -71,6 +72,20 @@ class StartupBenchmark {
 
     @Test
     fun coldStartFullCompilation() = measureColdStart(CompilationMode.Full())
+
+    /**
+     * Day 22: the same launch, with the baseline profile applied and nothing else.
+     *
+     * [BaselineProfileMode.Require] rather than `UseIfAvailable`, and the difference is the
+     * whole integrity of the result. `UseIfAvailable` runs happily when no profile is
+     * installed, reports a number indistinguishable in shape from a real one, and the
+     * before/after table then compares `None` against `None` — a 0% improvement written up as
+     * a measurement, or worse, noise written up as a win. `Require` fails the test instead,
+     * which is the only behaviour that cannot produce a false result.
+     */
+    @Test
+    fun coldStartBaselineProfile() =
+        measureColdStart(CompilationMode.Partial(BaselineProfileMode.Require))
 
     private fun measureColdStart(compilationMode: CompilationMode) = benchmark.measureRepeated(
         packageName = TARGET_PACKAGE,
