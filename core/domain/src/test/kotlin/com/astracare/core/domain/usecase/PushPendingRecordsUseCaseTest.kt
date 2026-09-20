@@ -2,8 +2,10 @@ package com.astracare.core.domain.usecase
 
 import androidx.paging.PagingData
 import com.astracare.core.common.Outcome
+import com.astracare.core.domain.remote.PullOutcome
 import com.astracare.core.domain.remote.PushOutcome
 import com.astracare.core.domain.remote.RemoteBeneficiarySource
+import com.astracare.core.domain.remote.SyncCursor
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.RepositoryError
 import com.astracare.core.model.Beneficiary
@@ -168,6 +170,15 @@ private class ScriptedRemoteSource : RemoteBeneficiarySource {
             else -> PushOutcome.Accepted
         }
     }
+
+    /**
+     * The push pass must not pull. Throwing rather than returning an empty result is the point:
+     * an empty list would let the two halves quietly merge into one use case, and the ordering
+     * of push before pull — which is what keeps conflicts rare — would stop being a decision
+     * anyone could see.
+     */
+    override suspend fun pullChangedSince(cursor: SyncCursor?): PullOutcome =
+        error("the push pass must not pull; that is a separate use case")
 }
 
 /**
@@ -215,8 +226,31 @@ private class FakeBeneficiaryRepository : BeneficiaryRepository {
 
     override fun observeById(id: BeneficiaryId): Flow<Beneficiary?> = flowOf(records[id])
 
+    override suspend fun findById(id: BeneficiaryId): Beneficiary? = records[id]
+
     override suspend fun upsert(beneficiary: Beneficiary): Outcome<Unit, RepositoryError> {
         records[beneficiary.id] = beneficiary
         return Outcome.success()
+    }
+
+    /**
+     * Mirrors the two real statements: insert only if absent, replace only if unchanged. A
+     * fake that wrote unconditionally would let a pull overwrite an edit that never left the
+     * device, and the test would still pass.
+     */
+    override suspend fun applyRemote(
+        record: Beneficiary,
+        replacingLocalVersion: Timestamp?,
+    ): Boolean {
+        val stored = records[record.id]
+        val mayWrite = if (replacingLocalVersion == null) {
+            stored == null
+        } else {
+            stored?.updatedAt == replacingLocalVersion
+        }
+        if (mayWrite) {
+            records[record.id] = record
+        }
+        return mayWrite
     }
 }

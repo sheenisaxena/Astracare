@@ -5,7 +5,7 @@ package com.astracare.core.domain.sync
  *
  * ## Why an interface in the domain rather than calling WorkManager directly
  *
- * The caller that matters is `OfflineFirstBeneficiaryRepository`, which requests a push right
+ * The caller that matters is `OfflineFirstBeneficiaryRepository`, which requests a sync right
  * after a successful local write. Without this seam that repository would import
  * `androidx.work` and every one of its unit tests would need a WorkManager test harness to
  * construct it.
@@ -19,25 +19,35 @@ package com.astracare.core.domain.sync
  * record onto the disk. If the scheduler fails, the periodic pass picks the record up. A
  * repository that waited on sync, or reported its failure, would have quietly stopped being
  * offline-first.
+ *
+ * ## Named for the pass, not for the push
+ *
+ * These were `requestPush`/`ensurePeriodicPush` on Day 13, when a pass only sent. A pass now
+ * pushes and then pulls, and the caller has no business knowing which halves run — that is
+ * precisely the detail this interface exists to hide. Renaming rather than adding
+ * `requestPull` alongside is deliberate: two entry points would let a caller ask for half a
+ * sync, and the ordering of the halves is a correctness property, not a caller's choice. See
+ * `SyncBeneficiariesWorker` for why push must come first.
  */
 interface SyncScheduler {
 
     /**
-     * Requests a push as soon as there is a network.
+     * Requests a sync pass as soon as there is a network.
      *
      * Called after every successful local write. Implementations must make this cheap and
      * idempotent — capturing ten records in a minute should not queue ten passes, because each
      * pass already sends everything pending.
      */
-    fun requestPush()
+    fun requestSync()
 
     /**
      * Ensures the recurring safety net is scheduled.
      *
      * Called once at application start, and safe to call repeatedly. The one-time request
-     * above covers the normal case; this covers the one that actually loses data — a push that
+     * above covers the normal case; this covers the two that actually lose data — a push that
      * failed while the app was closed, on a handset whose owner does not capture another
-     * record until tomorrow.
+     * record until tomorrow, and a server-side change that nothing on this device would
+     * otherwise think to ask about.
      */
-    fun ensurePeriodicPush()
+    fun ensurePeriodicSync()
 }

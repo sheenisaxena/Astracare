@@ -259,6 +259,8 @@ private class RecordingBeneficiaryRepository : BeneficiaryRepository {
 
     override fun observeById(id: BeneficiaryId): Flow<Beneficiary?> = records.map { it[id] }
 
+    override suspend fun findById(id: BeneficiaryId): Beneficiary? = records.value[id]
+
     override suspend fun upsert(beneficiary: Beneficiary): Outcome<Unit, RepositoryError> {
         if (failNextWrite) {
             failNextWrite = false
@@ -284,6 +286,27 @@ private class RecordingBeneficiaryRepository : BeneficiaryRepository {
 
     override suspend fun pendingSync(): List<Beneficiary> =
         written.filter { it.syncStatus == SyncStatus.PENDING }
+
+    /**
+     * Mirrors the two real statements: insert only if absent, replace only if unchanged. A
+     * fake that wrote unconditionally would let a pull overwrite an edit that never left the
+     * device, and the test would still pass.
+     */
+    override suspend fun applyRemote(
+        record: Beneficiary,
+        replacingLocalVersion: Timestamp?,
+    ): Boolean {
+        val stored = records.value[record.id]
+        val mayWrite = if (replacingLocalVersion == null) {
+            stored == null
+        } else {
+            stored?.updatedAt == replacingLocalVersion
+        }
+        if (mayWrite) {
+            records.update { it + (record.id to record) }
+        }
+        return mayWrite
+    }
 }
 
 /**

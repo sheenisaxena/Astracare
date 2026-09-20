@@ -76,6 +76,17 @@ interface BeneficiaryRepository {
     fun observeById(id: BeneficiaryId): Flow<Beneficiary?>
 
     /**
+     * One record, read once, or null if this device has never seen that ID.
+     *
+     * The one-shot counterpart to [observeById], added on Day 14 for the pull. A `Flow` is the
+     * right shape for a screen, which must be told when the row changes; it is the wrong shape
+     * for a sync pass, which needs the current value, once, and then makes a decision about it.
+     * Collecting the first emission of a Flow to fake that is a subscription and a cancellation
+     * per record, forty times a pass, to answer a question that is not ongoing.
+     */
+    suspend fun findById(id: BeneficiaryId): Beneficiary?
+
+    /**
      * Creates or replaces a record locally and marks it for sync.
      *
      * Returns immediately after the local write. It does NOT wait for the server — that is
@@ -118,6 +129,27 @@ interface BeneficiaryRepository {
         unchangedSince: Timestamp,
         status: SyncStatus,
     ): Boolean
+
+    /**
+     * Writes a version that came from the server, if the local row has not moved since it was
+     * read.
+     *
+     * Deliberately not [upsert]. That function is what the *capture screen* calls: it stamps
+     * the record PENDING and asks the sync engine to send it. Routing a pulled record through
+     * it would mark data the server just gave us as needing to be sent back, and every pull
+     * would queue a push of everything it received — an app talking to itself forever.
+     *
+     * [replacingLocalVersion] is the `updatedAt` of the row the decision was made against, or
+     * null when there was no local row and this is an insert. The write applies only if the
+     * stored row still matches, and the return value says whether it did. False is a normal
+     * outcome with a specific meaning: the health worker edited the record between the pull
+     * deciding and the write landing, so the server's version must not be applied over it. The
+     * next pull sees the new local state and flags a conflict instead.
+     *
+     * With [replacingLocalVersion] null, a row that has appeared in the meantime is left alone
+     * for the same reason — that row is a local capture the pull has not considered.
+     */
+    suspend fun applyRemote(record: Beneficiary, replacingLocalVersion: Timestamp?): Boolean
 }
 
 /**

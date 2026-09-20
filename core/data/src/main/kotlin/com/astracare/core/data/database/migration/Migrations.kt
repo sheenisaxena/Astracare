@@ -2,6 +2,7 @@ package com.astracare.core.data.database.migration
 
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.astracare.core.data.database.entity.SyncStateEntity
 
 /**
  * Schema migrations for `AstraCareDatabase`.
@@ -9,9 +10,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * ## Why these are hand-written rather than auto-migrations
  *
  * Room's `@AutoMigration` would generate [MIGRATION_1_2] correctly — adding a table is the
- * case it handles best. It is written out anyway, because the point of this file is the *next*
- * migration, which will rename or backfill a column and which auto-migration cannot infer. A
- * codebase where the first migration is generated and the second is hand-written has two
+ * case it handles best. It was written out anyway, on the argument that the point of this file
+ * would be the *next* migration, which auto-migration could not infer. [MIGRATION_2_3] is that
+ * migration, and it bears the argument out: its `CREATE TABLE` is trivially generatable and the
+ * decision that matters is what to put in the new table, which no schema diff can reason about.
+ *
+ * A codebase where the first migration is generated and the second is hand-written has two
  * mechanisms and no single place to look; one mechanism, established early, has one.
  *
  * ## Which `migrate` overload to override
@@ -28,7 +32,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * wrong one if this project ever adopted a `SQLiteDriver` (for example when moving to
  * `androidx.room3` for multiplatform).
  */
-val MIGRATION_1_2 = object : Migration(1, 2) {
+val MIGRATION_1_2 = object : Migration(V1, V2) {
     override fun migrate(db: SupportSQLiteDatabase) {
         // Written to match exactly what Room generates for DraftEntity, because Room
         // validates the resulting schema against the compiled one at open time and aborts
@@ -57,6 +61,41 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
 }
 
 /**
+ * Adds `sync_state`, which holds the pull cursor. Day 14.
+ *
+ * ## The backfill decision, which is the whole reason this is hand-written
+ *
+ * The table is created with **no row**, so [SyncStateEntity.pullCursor] reads as null and the
+ * first pull after upgrade asks the server for everything it holds. That is the expensive
+ * option and it is the only correct one. The tempting alternative is to seed a cursor — from
+ * `MAX(updated_at)` over `beneficiaries`, say — so an upgrading device does not re-download its
+ * own history. It would work on most devices and lose data on the rest: those timestamps come
+ * from device clocks, and any server-side change stamped behind a fast handset's clock would
+ * fall behind the seeded window and never be delivered. A slow first pull is recoverable; a
+ * record the server never sends again is not.
+ *
+ * This is the case the file's introduction was written for. Room's `@AutoMigration` would have
+ * generated the `CREATE TABLE` correctly and had no opinion at all about the backfill, because
+ * inferring one is not something a schema diff can do.
+ */
+val MIGRATION_2_3 = object : Migration(V2, V3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Matches what Room generates for SyncStateEntity exactly; Room validates the result
+        // against the compiled schema at open time and aborts on any difference — including
+        // a nullable column declared NOT NULL.
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `sync_state` (
+                `id` INTEGER NOT NULL,
+                `pull_cursor` TEXT,
+                PRIMARY KEY(`id`)
+            )
+            """.trimIndent(),
+        )
+    }
+}
+
+/**
  * Every migration, in the order Room should consider them.
  *
  * A single list rather than a `vararg` at the call site, so that adding a migration is one
@@ -68,4 +107,18 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
  * detekt's `SpreadOperator` rule rejects. A list is also the better type for a public
  * constant: arrays compare by identity and are mutable in place.
  */
-val ALL_MIGRATIONS: List<Migration> = listOf(MIGRATION_1_2)
+val ALL_MIGRATIONS: List<Migration> = listOf(MIGRATION_1_2, MIGRATION_2_3)
+
+/**
+ * Schema versions, named so a migration's endpoints read as a direction rather than as two
+ * bare integers — `Migration(V2, V3)` inside `MIGRATION_2_3` is checkable at a glance, and a
+ * transposed pair is the kind of mistake that only shows up on a real upgrade.
+ *
+ * Deliberately not derived from `DATABASE_VERSION`. A migration's target is a fixed point in
+ * history; tying the newest one to whatever the current version happens to be would make it
+ * follow the next bump silently, which is precisely the mistake the list above exists to
+ * prevent.
+ */
+private const val V1 = 1
+private const val V2 = 2
+private const val V3 = 3

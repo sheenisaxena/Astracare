@@ -187,6 +187,9 @@ private class FakePagedBeneficiaryRepository : BeneficiaryRepository {
     override fun observeById(id: BeneficiaryId): Flow<Beneficiary?> =
         records.map { all -> all.firstOrNull { it.id == id } }
 
+    override suspend fun findById(id: BeneficiaryId): Beneficiary? =
+        records.value.firstOrNull { it.id == id }
+
     override suspend fun upsert(beneficiary: Beneficiary): Outcome<Unit, RepositoryError> {
         records.value = records.value.filterNot { it.id == beneficiary.id } + beneficiary
         return Outcome.success()
@@ -212,5 +215,26 @@ private class FakePagedBeneficiaryRepository : BeneficiaryRepository {
             }
         }
         return unchanged != null
+    }
+
+    /**
+     * Mirrors the two real statements: insert only if absent, replace only if unchanged. A
+     * fake that wrote unconditionally would let a pull overwrite an edit that never left the
+     * device, and the test would still pass.
+     */
+    override suspend fun applyRemote(
+        record: Beneficiary,
+        replacingLocalVersion: Timestamp?,
+    ): Boolean {
+        val stored = records.value.firstOrNull { it.id == record.id }
+        val mayWrite = if (replacingLocalVersion == null) {
+            stored == null
+        } else {
+            stored?.updatedAt == replacingLocalVersion
+        }
+        if (mayWrite) {
+            records.value = records.value.filterNot { it.id == record.id } + record
+        }
+        return mayWrite
     }
 }

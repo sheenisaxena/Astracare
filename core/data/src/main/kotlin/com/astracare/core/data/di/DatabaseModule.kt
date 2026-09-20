@@ -6,6 +6,7 @@ import com.astracare.core.data.database.AstraCareDatabase
 import com.astracare.core.data.database.DATABASE_NAME
 import com.astracare.core.data.database.dao.BeneficiaryDao
 import com.astracare.core.data.database.dao.DraftDao
+import com.astracare.core.data.database.dao.SyncStateDao
 import com.astracare.core.data.database.migration.ALL_MIGRATIONS
 import dagger.Module
 import dagger.Provides
@@ -66,4 +67,8 @@ object DatabaseModule {
 
     @Provides
     fun providesDraftDao(database: AstraCareDatabase): DraftDao = database.draftDao()
+
+    @Provides
+    fun providesSyncStateDao(database: AstraCareDatabase): SyncStateDao =
+        database.syncStateDao()
 }

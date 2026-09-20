@@ -1103,15 +1103,286 @@ sites carry one, because the failure gives no hint which of them is missing.
 
 ---
 
+# Part 9 — Pulling from the server, and conflicts
+
+Day 14. The day the project is actually judged on: everything before this is competent
+plumbing that many Android codebases have. What a server sends back, and what the app does when
+it disagrees with what is on the handset, is the part that is usually got wrong — and got wrong
+invisibly.
+
+## 9.1 The conflict rule reads the sync status, not the clock
+
+The one-line version of last-write-wins is:
+
+```kotlin
+if (remote.updatedAt > local.updatedAt) applyRemote() else keepLocal()
+```
+
+It is what most offline-first tutorials do. On this app it silently deletes field data, for two
+independent reasons.
+
+**It resolves cases that are not resolvable.** A supervisor corrects a village name on the
+server while a health worker corrects the child's weight on the handset. Both edits are real,
+neither is wrong, and one of them is about to be discarded with no record that it existed.
+
+**The comparison is not sound.** `updatedAt` is stamped from the device's wall clock. That
+clock drifts, jumps when NTP corrects it, and can be set by hand — which DECISION_LOG 2.6 has
+said since Day 2. A handset ten minutes fast wins every race it enters, permanently, and
+nothing about the resulting data looks wrong.
+
+The way out was to notice that the question a conflict detector actually needs to answer is not
+*"which version is newer?"* but ***"does this device hold an edit the server has never
+seen?"*** — and the device knows that for certain, without consulting any clock. It is exactly
+what `SyncStatus` records:
+
+- `SYNCED` means the server acknowledged **this exact version**. Day 13's conditional mark
+  (8.2) is what makes that trustworthy: a record edited during its own push is never marked
+  SYNCED, so the status cannot overstate what the server has.
+- Anything else means there is local work in flight.
+
+So the rule is: **if the local row is SYNCED, the server's version supersedes it and applying
+it loses nothing. If it is not SYNCED, both sides have moved and neither may be overwritten.**
+
+```kotlin
+when {
+    local == null                        -> AcceptRemote(remote, replacing = null)
+    local.syncStatus == SYNCED           -> acceptUnlessAlreadyCurrent(local, remote)
+    local.hasSameContentAs(remote)       -> AcceptRemote(remote, replacing = local.updatedAt)
+    local.syncStatus == CONFLICTED       -> KeepLocal
+    else                                 -> FlagConflict(local.id, local.updatedAt)
+}
+```
+
+`ConflictResolver.resolve` performs **no timestamp comparison at all**, and
+`ConflictResolverTest` asserts that as a property rather than leaving it as a claim: the same
+pair of records is resolved twice with the timestamps swapped, and both must give the same
+answer. That test exists to fail when someone later "fixes" a conflict by reaching for
+`updatedAt`.
+
+The third branch is worth its own note. Two sides can hold an unsent edit and still agree —
+two people made the same correction, or an earlier push was accepted and the acknowledgement
+was lost. Nothing is in conflict when nothing differs, and flagging it anyway teaches the
+health worker that the red chip means nothing.
+
+**Concept — a correctness property that costs nothing to state is worth stating as a test.**
+
+## 9.2 Content equality is "normalise and compare", not a field list
+
+`hasSameContentAs` could have been five `&&`-joined field comparisons. It is this instead:
+
+```kotlin
+private fun Beneficiary.hasSameContentAs(other: Beneficiary): Boolean =
+    copy(updatedAt = other.updatedAt, syncStatus = other.syncStatus) == other
+```
+
+The difference is a correctness one. A field added to `Beneficiary` and forgotten in a
+hand-written list makes two genuinely different records compare equal — and *a conflict that
+compares equal is a conflict that silently disappears*. This form fails the other way: a new
+field participates automatically, and the worst case is a conflict flagged that need not have
+been. One of those is recoverable by a person; the other is not.
+
+`ConflictResolverTest` walks every field individually and asserts that changing it produces a
+conflict, so the property is pinned rather than assumed.
+
+**Concept — when two failure modes are available, pick the one a human can see.**
+
+## 9.3 Detect, do not resolve
+
+A conflicted record is marked `CONFLICTED`, keeps its local version, shows a red chip and sorts
+to the top of the history list. And then it stops. There is no merge screen, no "keep mine /
+keep theirs", no field-level picker.
+
+That is a boundary, chosen, not a feature that ran out of time. Three options were weighed:
+
+- **Auto-resolve everything.** Fast to build, and it is last-write-wins wearing a hat. Rejected
+  for the reasons in 9.1.
+- **Auto-resolve, with a merge UI for the rest.** The right end state, and it is a screen, a
+  field-level diff, an interaction model and a set of tests — comfortably more than a day, on
+  the day that also has to build the pull.
+- **Detect, flag, and stop.** Nothing is lost: the local version is in the database, the
+  server's is on the server, and the record is visibly waiting for a person.
+
+The third is a *visible* dead end, and that is the whole argument. A wrong auto-resolution is
+invisible — the record looks fine and the data is gone. A record a health worker cannot resolve
+yet is annoying, and annoying is recoverable.
+
+`SyncStatus.CONFLICTED` has existed since Day 7 and until today nothing could produce it, which
+was noted at the time: a push cannot discover a conflict, only a pull can.
+
+## 9.4 The pull is a use case, not a `RemoteMediator` — correcting 7.3
+
+DECISION_LOG 7.3 predicted that Paging's error and retry branch would become reachable "via
+RemoteMediator" on Day 14. That prediction was wrong, and it is worth correcting rather than
+quietly leaving.
+
+`RemoteMediator` is Paging's hook for *network-backed paging*: the list scrolls, Paging asks for
+more, the mediator fetches a page and writes it to the database. It is the right tool when the
+dataset is the server's and the local table is a window onto it.
+
+This app is the other shape. The dataset belongs to the handset — a health worker's own
+captures, which exist and must be listable with no connectivity at all — and the server is a
+peer that occasionally has changes. Binding the pull to a `RemoteMediator` would make the sync
+fire on *scroll*, on the UI's schedule, and not at all for a device sitting in a pocket. The
+pull is therefore a plain use case beside `PushPendingRecordsUseCase`, run by the same Worker.
+
+The consequence: Paging still never sees a network error, because nothing in the Paging path
+ever touches the network. `LoadState.Error` remains unreachable, and it remains an open item —
+now correctly described, rather than pencilled in against a day that was never going to fix it.
+
+**Concept — a prediction in a decision log is a decision to revisit, not a promise to keep.**
+
+## 9.5 The delta cursor is opaque, and that is a data-safety decision
+
+The obvious signature for a delta pull is `pullChangedSince(since: Timestamp)`. It has a
+failure mode that is invisible until it loses data.
+
+The server would answer it by comparing `since` against each record's `updatedAt` — and
+`updatedAt` is stamped by the *device that captured the record*, from a clock the server does
+not control. A handset whose clock is ten minutes slow pushes a record stamped ten minutes in
+the past. If another device has already pulled past that point, the record falls behind the
+window and **is never delivered to anyone**. Nothing errors. The record simply does not arrive.
+
+So the cursor is `SyncCursor`, an opaque value class holding a String the client stores and
+hands back untouched. A sequence number, an etag, a Postgres LSN, a page token — the client
+cannot tell and must not care. Making it opaque is not fastidiousness: it removes the *ability*
+to compare it to a local clock, which is the only reliable way to stop someone doing so.
+
+This is also why `MIGRATION_2_3` creates `sync_state` with no row. Seeding a cursor from
+`MAX(updated_at)` over the existing records would spare an upgrading device a full re-download
+and would skip exactly the records described above. A slow first pull is recoverable; a record
+the server never sends again is not.
+
+## 9.6 The cursor advances once, at the end of the pass
+
+Not per record. The ordering is the whole safety property:
+
+- **Advance late** (as now): a crash halfway through re-delivers records already applied on the
+  next pull. Free, because resolution is idempotent — re-applying a record that is already
+  there yields `KeepLocal`, and `PullRemoteChangesUseCaseTest` asserts the replay writes
+  nothing.
+- **Advance per record**: a pass that dies at record five leaves records six to forty behind
+  the window, and the server never offers them again.
+
+One costs a repeated request. The other loses data with no symptom. `RoomSyncStateRepository`
+therefore also does *not* catch exceptions, which is the deliberate opposite of
+`RoomDraftRepository` (6.4): a cursor that failed to save and was treated as saved is the same
+bug arriving by a different route.
+
+## 9.7 The stale write, from the other direction
+
+Day 13 (8.2) guarded the window between reading a record and marking it sent. The pull has the
+mirror image: between *deciding* what to do with a record and *writing* that decision, the
+health worker can edit it. Applying the server's version then replaces an edit that has never
+been sent anywhere, and the row looks perfectly healthy afterwards.
+
+Every write on the pull path is therefore conditional on the local row not having moved, and
+both statements refuse rather than overwrite:
+
+- `replaceIfUnchanged` — a `@Transaction` over a read and an upsert, applied only if
+  `updated_at` still matches what the decision was made against.
+- `insertIfAbsent` — `@Insert(onConflict = IGNORE)`. `REPLACE` would delete a local capture
+  that appeared since the decision and insert the server's row over it.
+
+A refused write is a normal outcome, not an error: the decision was made against a version that
+no longer exists, and the next pull decides again — this time seeing the local edit and
+flagging a conflict. The fakes in every test enforce the same refusal, because a fake that
+wrote unconditionally would let the test pass against production code that overwrites.
+
+`replaceIfUnchanged` is a transaction over a read and an upsert rather than one nine-column
+conditional `UPDATE`. Both are atomic; the transaction cannot drift. A hand-written column list
+is a second place the schema is enumerated, and a column added to the entity and forgotten
+there would be silently preserved from the stale local row while every other field came from
+the server — producing a record that never existed on either side.
+
+## 9.8 Push before pull, and an interrupted push skips the pull
+
+The pass is push, then pull. Pushing first means a record the device has been holding reaches
+the server *before* the pull asks what the server has, so it comes back as accepted rather than
+as a competing version and resolves silently. The reverse ordering manufactures conflicts out
+of records that were about to sync cleanly — and conflicts have to be rare enough that one
+means something.
+
+If the push is interrupted, the pull does not run. `PushSummary.Interrupted` means the
+connection dropped or the server is unreachable, so the pull would almost certainly fail the
+same way, on a handset whose battery has to last a working day. It is the same reasoning that
+stops the push loop rather than trying the next forty records (8.5).
+
+The honest cost: on the rare failure specific to one record rather than to the connection, the
+pull waits for the retry. Bounded, and cheaper than the alternative.
+
+## 9.9 The mock server now changes on its own
+
+`MockRemoteBeneficiarySource` gained a delta pull and, more importantly, a deterministic
+server-side edit every third pull — the oldest record it holds gets its village "corrected", as
+another health worker's handset would do. Without that, a pull on a single device only ever
+returns what that device pushed, `CONFLICTED` stays unreachable outside the unit tests, and the
+whole feature is undemonstrable on a real handset.
+
+Two details that would have made the mock useless:
+
+**The server's clock is its own.** The mock's sequence counter is seeded once from
+`TimeProvider` and advances by itself afterwards. Stamping server-side edits with
+`timeProvider.now()` would model a server whose clock agrees with the handset's exactly —
+hiding the one condition the entire design is built around.
+
+**A push does not restamp `updatedAt`.** That field is when the record was *edited*, which the
+capturing device knows and the server does not. Restamping it on accept would make every
+subsequent pull look like a change and rewrite the whole table on every pass.
+
+## 9.10 WorkManager's queue outlives the code that wrote it
+
+`PushBeneficiariesWorker` became `SyncBeneficiariesWorker`, and `SyncScheduler`'s methods
+became `requestSync`/`ensurePeriodicSync` — renamed rather than joined by a `requestPull`,
+because two entry points would let a caller ask for half a sync and the ordering of the halves
+is a correctness property (9.8), not a caller's choice.
+
+The rename is not free. WorkManager's queue lives in its own database, and the periodic entry
+written by an earlier build names a class that no longer exists. On upgrade it keeps firing and
+keeps failing with a `ClassNotFoundException` naming a class nothing in the source tree
+mentions. `ensurePeriodicSync` therefore cancels the Day 13 work names first — three lines, a
+no-op on a fresh install, and the kind of thing that otherwise costs somebody a confusing hour.
+
+## 9.11 Replacing a Hilt module replaces all of it
+
+Adding `SyncStateRepository` to `DataModule` surfaced a latent break in the instrumented test
+graph. `@TestInstallIn(replaces = [DataModule::class])` deletes **every** binding in that
+module, not only the one being faked — and `TestDataModule` was restoring just
+`BeneficiaryRepository`, so `DraftRepository` and `RemoteBeneficiarySource` had been missing
+from the test graph since the days they were added. Nothing caught it because the instrumented
+source set is excluded from CI (4.5).
+
+Fixed by restating the other bindings, with a comment saying why they look redundant. The
+narrower tool — `@UninstallModules` with `@BindValue` on the one test that needs the fake —
+does not have this failure mode and is the right answer if that list grows again.
+
+**Concept — a coarse test double has a blast radius, and it grows every time the real module
+does.**
+
+## 9.12 Schema v3, and the second migration earning its keep
+
+`sync_state` is a third table: one row, one nullable TEXT column. It could have been DataStore,
+and the argument against is sharper than it was for drafts (6.3). The cursor has to stay
+consistent with the rows it describes. A cursor that survives a backup/restore while the
+records do not tells the server this device is current on data it no longer holds, and the
+server never resends it. One file means one backup, one restore, one encryption boundary when
+that work lands, and no window in which the two disagree.
+
+`Migrations.kt` was written by hand on Day 11 on the argument that the *next* migration would
+be the one auto-migration could not infer. That turned out to be right in an unexpected way:
+`MIGRATION_2_3`'s `CREATE TABLE` is trivially generatable, and the decision that matters is
+what to put in the new table (9.5) — which no schema diff can reason about at all.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
 |---|---|---|
 | ~~Move `DispatchersModule` to `:core:common`~~ | **Resolved** — moved, via the `astracare.jvm.hilt` convention plugin and `hilt-core` (2.5) | Closed |
-| Client wall-clock time is not monotonic, so timestamp conflict resolution is best-effort (2.6) | Accepted limitation; Kronos is the known remedy | Revisit if multi-device editing is added |
+| Client wall-clock time is not monotonic (2.6) | Narrowed — conflict detection no longer depends on it (9.1) and the delta window uses an opaque cursor (9.5). Remaining exposure is display ordering by `recorded_at` | Kronos, or a server-stamped receipt time, if timestamps ever become user-visible evidence |
 | ~~detekt 1.23.8 vs Kotlin 2.2.10 compatibility~~ | **Resolved** — detekt parses Kotlin 2.2.10 without error; its embedded compiler handles the newer syntax | Closed |
 | `android.disallowKotlinSourceSets=false` required — KSP registers generated sources via `kotlin.sourceSets`, which AGP 9 rejects (3.5) | Third-party tooling gap | When KSP supports AGP 9 built-in Kotlin |
-| Conflict-resolution strategy (last-write-wins vs vector clocks) | Not yet decided | With the sync engine |
+| ~~Conflict-resolution strategy (last-write-wins vs vector clocks)~~ | **Resolved** — neither: detection keyed on `SyncStatus`, no clock comparison (9.1) | Closed |
 | SQLCipher vs Jetpack Security for field-level encryption | Not yet decided | With PII encryption |
 | Cold-start numbers before/after Baseline Profile | Not yet measured | With the benchmark module |
 | MVI marker interfaces live in `:feature:patients/mvi` (5.1) | Deliberate — one consumer | Move to `:core:ui` at the second feature module |
@@ -1121,10 +1392,15 @@ sites carry one, because the failure gives no hint which of them is missing.
 | ~~History list is a plain `LazyColumn`, not Paging~~ | **Resolved** — Paging 3 over Room (Part 7) | Closed |
 | The SQL `ORDER BY` has no test; only the domain half of the contract is pinned (7.2, 7.6) | Needs an instrumented test against a real database | Days 18-20 |
 | `CASE`-based ordering cannot use an index (7.2) | Correct at one health worker's scale | With the benchmark work, as an indexed rank column + backfill migration |
-| Paging's error/retry branch is unimplemented (7.3) | Still true — push does not go through Paging; only a pull via RemoteMediator makes a load failure reachable | Day 14 |
-| No test that the Worker maps PushSummary to the right WorkManager Result (8.1) | The algorithm is covered; the ten-line adapter is not | Days 18-20, with `work-testing` |
-| Sync failures are invisible in the UI — a record just stays PENDING (8.5) | No surface for it yet | Day 14, alongside conflict resolution |
-| `MockRemoteBeneficiarySource` holds accepted records in memory only (8.7) | Fine for a mock; a restart forgets the 'server' | Stays a mock — stated scope boundary |
+| Paging's error/retry branch is unimplemented (7.3) | Still true, and the Day 12 prediction was wrong: the pull is a use case, not a `RemoteMediator` (9.4), so nothing in the Paging path ever touches the network and `LoadState.Error` stays unreachable | Only if paging ever becomes network-backed — otherwise never |
+| No test that the Worker maps the summaries to the right WorkManager Result (8.1, 9.8) | The algorithms are covered; the adapter — including "an interrupted push skips the pull" — is not | Days 18-20, with `work-testing` |
+| A CONFLICTED record is a visible dead end — no merge UI (9.3) | Deliberate: detection without resolution loses nothing, and a wrong auto-merge is invisible | A field-level resolution screen, sized as its own day |
+| `MockRemoteBeneficiarySource` holds accepted records in memory only (8.7, 9.9) | Fine for a mock; a restart forgets the 'server' while the device keeps its cursor, so the next pull returns nothing until new pushes land | Stays a mock — stated scope boundary |
 | KMP variant split: domain compiles against `paging-common-desktop`, app ships `-android` (7.1) | Expected and routine | Watch for it if a NoSuchMethodError appears |
-| No logging abstraction — `RoomDraftRepository` calls `android.util.Log` directly (6.4) | Knowing shortcut | With the sync engine, which needs real diagnostics |
+| No logging abstraction — `RoomDraftRepository`, both workers and the mock call `android.util.Log` directly (6.4) | The sync engine has landed and this did not, which was the trigger named on Day 11. Still a knowing shortcut, now with more call sites | Next time a diagnostic is needed that `adb logcat` on a developer's desk cannot give |
 | Hand-rolled navigation (6.5) | Correct at two destinations | The first destination that takes an argument |
+| Room schema JSON for v2 and v3 is not committed; only `1.json` is in `core/data/schemas/` | Blocks the migration test that the exported schemas exist for | Commit them on the next `./gradlew` run |
+| No migration test for 1→2 or 2→3 | `MigrationTestHelper` needs instrumentation, which is out of CI (4.5) | Days 18-20, together with the `ORDER BY` test |
+| A server that expires cursors has no full-resync path (9.5) | `PullOutcome` has no "cursor too old" case; the mock never expires one | When there is a real backend with log compaction |
+| Deletes do not sync — no tombstones (9.1) | The app cannot delete a record, so the gap is not reachable today | With the first delete affordance |
+| A pull's server-side change arrives up to an hour late on an idle handset | The periodic pass is the only trigger when nothing is being captured | A push notification, which needs a real backend (4.2) |

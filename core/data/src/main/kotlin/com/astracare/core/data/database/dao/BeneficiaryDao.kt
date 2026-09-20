@@ -2,7 +2,10 @@ package com.astracare.core.data.database.dao
 
 import androidx.paging.PagingSource
 import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.astracare.core.data.database.entity.BeneficiaryEntity
 import kotlinx.coroutines.flow.Flow
@@ -100,6 +103,15 @@ interface BeneficiaryDao {
     fun observeById(id: String): Flow<BeneficiaryEntity?>
 
     /**
+     * One row, read once. The sync engine's counterpart to [observeById].
+     *
+     * A pull asks "what do I already have for this ID?" and then decides. That is a question
+     * with an answer, not a stream to subscribe to.
+     */
+    @Query("SELECT * FROM beneficiaries WHERE id = :id")
+    suspend fun findById(id: String): BeneficiaryEntity?
+
+    /**
      * `@Upsert` rather than `@Insert(onConflict = REPLACE)`.
      *
      * REPLACE is implemented as DELETE followed by INSERT, which triggers `ON DELETE CASCADE`
@@ -147,6 +159,42 @@ interface BeneficiaryDao {
         unchangedSince: Long,
         status: String,
     ): Int
+
+    /**
+     * Inserts a record the device has never seen, and does nothing if it turns out to have one.
+     *
+     * `IGNORE`, not `REPLACE`. The two differ in exactly the case this exists for: a pull
+     * decided this ID was absent, and by the time the write lands a local capture has created
+     * it. REPLACE would delete that local row and insert the server's — discarding a record
+     * that has never been sent anywhere. IGNORE leaves it, and the next pull reconsiders it
+     * with the local row in hand and flags a conflict if the two disagree.
+     *
+     * Returns the new rowid, or `-1` when the insert was ignored.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(entity: BeneficiaryEntity): Long
+
+    /**
+     * Replaces a row with a server version, but only if it has not been edited since the pull
+     * read it.
+     *
+     * Written as a `@Transaction` over a read and an upsert rather than as one long conditional
+     * `UPDATE ... SET` over nine columns. Both are atomic; this one cannot drift. A hand-written
+     * column list is a second place the schema is enumerated, and a column added to the entity
+     * and forgotten here would be silently preserved from the stale local row while every other
+     * field came from the server — producing a record that never existed on either side.
+     *
+     * Returns whether the replacement applied. False means the row moved; see
+     * `BeneficiaryRepository.applyRemote` for why that is a normal outcome.
+     */
+    @Transaction
+    suspend fun replaceIfUnchanged(entity: BeneficiaryEntity, unchangedSince: Long): Boolean {
+        val unchanged = findById(entity.id)?.takeIf { it.updatedAtEpochMillis == unchangedSince }
+        if (unchanged != null) {
+            upsert(entity)
+        }
+        return unchanged != null
+    }
 
     @Query("DELETE FROM beneficiaries")
     suspend fun deleteAll()

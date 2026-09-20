@@ -18,9 +18,9 @@ import javax.inject.Inject
  * interfaces, and `PushPendingRecordsUseCaseTest` drives every branch in milliseconds with no
  * Android at all.
  *
- * `PushBeneficiariesWorker` is then about ten lines: call this, map the summary to a
- * `Result`. WorkManager is scheduling infrastructure, and infrastructure should not own the
- * decisions.
+ * `SyncBeneficiariesWorker` is then about ten lines: call this and its pull counterpart, map
+ * the summaries to a `Result`. WorkManager is scheduling infrastructure, and infrastructure
+ * should not own the decisions.
  *
  * ## The stale-write hazard
  *

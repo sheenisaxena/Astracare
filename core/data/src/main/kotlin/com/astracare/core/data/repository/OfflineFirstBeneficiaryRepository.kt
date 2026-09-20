@@ -100,6 +100,9 @@ class OfflineFirstBeneficiaryRepository @Inject constructor(
     override fun observeById(id: BeneficiaryId): Flow<Beneficiary?> =
         dao.observeById(id.value).map { it?.toDomain() }
 
+    override suspend fun findById(id: BeneficiaryId): Beneficiary? =
+        withContext(ioDispatcher) { dao.findById(id.value)?.toDomain() }
+
     override suspend fun upsert(beneficiary: Beneficiary): Outcome<Unit, RepositoryError> =
         withContext(ioDispatcher) {
             // SQLException specifically, not Exception. A disk-full or corrupt-database error
@@ -112,7 +115,10 @@ class OfflineFirstBeneficiaryRepository @Inject constructor(
                 // The health worker's confirmation comes from the disk; sync is what happens
                 // afterwards. Enqueuing is cheap and cannot fail in a way the caller should
                 // hear about — if it does, the periodic pass collects the record anyway.
-                syncScheduler.requestPush()
+                //
+                // Note that applyRemote below deliberately does NOT do this. A record that
+                // came from the server does not need sending back to it.
+                syncScheduler.requestSync()
                 Outcome.success()
             } catch (e: SQLException) {
                 Outcome.Failure(RepositoryError.StorageFailure(e))
@@ -136,7 +142,40 @@ class OfflineFirstBeneficiaryRepository @Inject constructor(
         ) > 0
     }
 
+    /**
+     * The pull's write path, and the one write in this class that does **not** request a sync.
+     *
+     * That omission is the whole difference between this and [upsert]. A record that arrived
+     * from the server does not need sending back, and a version of this that called
+     * `syncScheduler.requestSync()` would have every pull enqueue a push of everything it had
+     * just received — an app in a conversation with itself, on a metered connection, on a
+     * handset that has to last a working day.
+     *
+     * Two statements rather than one, because "insert a record I have never seen" and "replace
+     * one I have" are different operations with different safety conditions. Both refuse rather
+     * than overwrite when the local row turns out not to be what the pull decided against; see
+     * the DAO for why `IGNORE` and not `REPLACE`.
+     */
+    override suspend fun applyRemote(
+        record: Beneficiary,
+        replacingLocalVersion: Timestamp?,
+    ): Boolean = withContext(ioDispatcher) {
+        if (replacingLocalVersion == null) {
+            dao.insertIfAbsent(record.toEntity()) != INSERT_IGNORED
+        } else {
+            dao.replaceIfUnchanged(record.toEntity(), replacingLocalVersion.epochMillis)
+        }
+    }
+
     private companion object {
+        /**
+         * What Room returns from an `@Insert(onConflict = IGNORE)` that inserted nothing.
+         *
+         * Named because `!= -1L` at the call site reads as arithmetic rather than as "the row
+         * already existed, so a local capture beat this pull to the ID".
+         */
+        const val INSERT_IGNORED = -1L
+
         /**
          * Rows per page.
          *

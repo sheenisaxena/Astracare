@@ -3,9 +3,11 @@ package com.astracare.core.data.di
 import com.astracare.core.data.remote.MockRemoteBeneficiarySource
 import com.astracare.core.data.repository.OfflineFirstBeneficiaryRepository
 import com.astracare.core.data.repository.RoomDraftRepository
+import com.astracare.core.data.repository.RoomSyncStateRepository
 import com.astracare.core.domain.remote.RemoteBeneficiarySource
 import com.astracare.core.domain.repository.BeneficiaryRepository
 import com.astracare.core.domain.repository.DraftRepository
+import com.astracare.core.domain.repository.SyncStateRepository
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -54,6 +56,15 @@ abstract class DataModule {
      */
     @Binds
     abstract fun bindsDraftRepository(repository: RoomDraftRepository): DraftRepository
+
+    /**
+     * The pull cursor gets its own repository rather than a method on the beneficiary one.
+     * It describes no beneficiary, and it must survive an operation that clears every record.
+     */
+    @Binds
+    abstract fun bindsSyncStateRepository(
+        repository: RoomSyncStateRepository,
+    ): SyncStateRepository
 
     /**
      * The mock server. Bound here rather than in `:core:sync` because it is a data source,
