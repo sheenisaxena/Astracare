@@ -1,5 +1,6 @@
 package com.astracare.feature.patients
 
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -147,6 +148,20 @@ internal fun BeneficiaryListScreen(
         // arrived — so the empty state is only shown once refresh has finished.
         val isRefreshing = records.loadState.refresh is LoadState.Loading
         val isEmpty = !isRefreshing && records.itemCount == 0
+
+        // Day 21. Tells the framework when this app is actually usable, which is not the same
+        // moment as its first frame.
+        //
+        // Cold start is normally quoted as time-to-initial-display: the first frame the
+        // compositor puts on screen. For this app that frame is a spinner — the database is
+        // encrypted, so opening it means unwrapping a Keystore key before Paging can return a
+        // single row, and none of that has happened yet. Optimising TTID here would mean
+        // optimising how fast a health worker can be shown a loading indicator.
+        //
+        // reportFullyDrawn moves the metric to the frame that carries records, which is the
+        // number worth defending. It also costs nothing when nobody is measuring: the
+        // framework logs it and moves on.
+        ReportDrawnWhen { !isRefreshing }
 
         Column(Modifier.padding(innerPadding)) {
             RoleBanner(role = permissions.role, onIntent = onIntent)

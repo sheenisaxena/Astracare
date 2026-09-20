@@ -22,6 +22,26 @@ android {
                 enable = false
             }
         }
+
+        // Day 21. The variant the macrobenchmark measures: release's compilation settings,
+        // debug's signing so it installs, and explicitly not debuggable — a debuggable process
+        // runs interpreted and its startup time is a number about the debugger.
+        //
+        // What this build type is NOT is a release build. `initWith(release)` inherits
+        // `optimization { enable = false }`, so the APK is unminified and unshrunk (the
+        // standing R8 item). Cold start measured here is therefore an upper bound on a real
+        // release's, and the baseline-profile delta measured on Day 22 may shift once R8 is
+        // on. Stated here rather than discovered later: see DECISION_LOG 15.5.
+        create("benchmark") {
+            initWith(buildTypes.getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
+            // A distinct suffix would install alongside the real app, which sounds tidy and
+            // is wrong: the benchmark drives `com.astracare` by package name, and two
+            // installs means measuring whichever one the launcher resolves.
+            applicationIdSuffix = null
+        }
     }
 
     // One set of fakes, two runners. `src/sharedTest` is not an AGP convention — it is an

@@ -24,4 +24,11 @@ dependencies {
     // collectAsLazyPagingItems + itemKey. paging-common arrives transitively through
     // :core:domain, which is where the PagingData type in the repository contract comes from.
     implementation(libs.paging.compose)
+
+    // Day 21: ReportDrawnWhen, for time-to-full-display. This is an Activity API reaching into
+    // a feature module, which is worth a second look before accepting — but the screen is the
+    // only thing that knows when it has finished loading, and the alternative (hoisting a
+    // "ready" flag up to :app so MainActivity can call reportFullyDrawn) would put a
+    // performance concern into the navigation shell and couple it to this screen's load state.
+    implementation(libs.androidx.activity.compose)
 }

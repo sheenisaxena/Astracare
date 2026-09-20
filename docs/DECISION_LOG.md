@@ -2333,6 +2333,191 @@ An instrumented CI lane is the remaining half and it is its own day.
 What it does prove is the wiring, which is the one thing no unit test in this project can reach.
 
 ---
+## 14.9 The end-to-end test found an unlabelled button on its first run
+
+`CaptureToHistoryTest` failed the first time it ran, and not because the test was wrong.
+
+The Compose semantics tree showed this:
+
+```
+Node #18  Role='Button'  Actions=[OnClick, RequestFocus]     ← merged: no name at all
+ └ Node #22  ClearAndSetSemantics = 'true'
+    └ Node #24  Text = '[Add record]'                        ← unmerged only
+```
+
+`ExtendedFloatingActionButton` wraps its `text` slot in `clearAndSetSemantics {}`. That is
+correct of Material: the API's accessibility contract puts the button's name on the `icon`
+slot, because normally the icon is the thing needing a description and the visible label would
+only duplicate it. This FAB was written with `icon = {}`. The label was cleared and nothing
+replaced it, so the primary action of the entire app announced itself to TalkBack as "button".
+
+The fix is one modifier. What is worth recording is everything that failed to catch it:
+
+- 152 unit tests, none of which render a composable.
+- `RolePermissionsTest`, which asserts a field worker *may* capture a record — a claim about the
+  matrix, not about whether the affordance is usable.
+- A design system that gets this exact concern right elsewhere: `StatusChip` uses
+  `clearAndSetSemantics` deliberately and supplies a description, because a coloured pill
+  reading "Pending" needs the longer sentence. The team that wrote that line is the same one
+  that left the FAB unnamed.
+- Twelve days of reading this code, including mine.
+
+**Concept — accessibility defects are invisible to every test that does not look at the
+semantics tree**, and reviewing the code cannot substitute, because the bug was in a library's
+behaviour rather than in the lines anyone wrote.
+
+The test now finds the FAB by content description rather than by text. That is not a workaround
+for the fix; it is the stronger assertion, because it checks what a screen-reader user is told
+rather than what a sighted user sees.
+
+## 14.10 The fake had reported "still loading" since Day 8
+
+With the FAB fixed, all three tests still failed — now timing out waiting for the empty state.
+The semantics tree showed why: a `ProgressBarRangeInfo` node, and no empty state anywhere. The
+list was on its spinner and was never going to leave it.
+
+```kotlin
+PagingData.from(it.values.toList())   // FakeBeneficiaryRepository, Day 8 to Day 20
+```
+
+That overload leaves every `LoadState` as `Loading`, permanently. `BeneficiaryListScreen`
+distinguishes spinner from empty state with `loadState.refresh is LoadState.Loading` —
+deliberately, because `itemCount == 0` is also true before the first page arrives (7.4). So the
+fake pinned the screen to the spinner branch and no record could ever appear.
+
+Three things about this are worth more than the fix:
+
+**The overload is deprecated, and the deprecation message says exactly this.** The build had
+been printing the warning for twelve days. Nobody read it. Gradle's warning output is a place
+things go to not be read, and the lesson is not "read the warnings" — it is that a warning is
+not a control.
+
+**No test could have caught it.** `FakeBeneficiaryRepository` had been the repository behind
+every `:app` test since Day 8, and its documentation carefully explained why a fake must not
+sort — the reasoning about not hiding failure modes was right there, in the same file, next to
+a call that hid one completely. Nothing rendered the screen, so nothing consumed the load state.
+
+**It would have shipped as a demo failure, not a bug report.** The real repository uses `Pager`,
+which supplies proper load states, so the app itself was fine. The defect lived entirely in the
+double — which means the first person to hit it would have been someone running the test suite
+on a clean checkout and concluding the project was broken.
+
+**Concept — a test double is production code for the tests**, and the parts of it nothing
+exercises are exactly as untrustworthy as any other unexercised code.
+
+---
+
+# Part 15 — Measuring cold start before there is anything to take credit for
+
+Day 21. The plan: *"Add `:macrobenchmark` module. Measure cold start WITHOUT a baseline
+profile. Record the number — do this before, or the delta is unprovable."*
+
+The instruction in that sentence is the whole day. Adding a baseline profile and then
+announcing an improvement is the most common unfalsifiable claim on an Android CV, and it is
+unfalsifiable for a boring reason: nobody measured first. So Day 21 builds the instrument and
+takes the "before" reading; Day 22 gets to make a claim.
+
+## 15.1 A third module kind, and why the instrument lives outside the patient
+
+`:macrobenchmark` is a `com.android.test` module — not a library, not an application. It
+produces an APK containing only instrumentation, installed beside `:app` and driving it from a
+separate process.
+
+That separation is the point. An in-process measurement is part of what it measures: the
+profiler's own class loading, its allocations and its JIT pressure land inside the sample. A
+macrobenchmark launches the app the way the launcher does, kills it between iterations, and
+reads the timing from the system rather than from inside the app.
+
+The cost is that it cannot run anywhere except on a physical device, which puts it outside CI
+permanently — a different exclusion from the instrumented tests of Day 20, and a more honest
+one. Those *should* be continuous and are not. A benchmark should not be: its output is a
+number, not a pass or a fail, and a number measured on shared CI hardware is a number about the
+CI hardware.
+
+## 15.2 A benchmark build type, because neither existing one can be measured
+
+A macrobenchmark needs a build type present in both modules, and both existing ones are
+disqualified:
+
+- **`debug`** is debuggable, so it runs interpreted with JIT optimisations disabled. Its startup
+  time is a fact about the debugger.
+- **`release`** is unsigned, so it does not install.
+
+Hence `benchmark`: release's compilation settings, debug's signing key, `isDebuggable = false`,
+and `matchingFallbacks` so the library modules resolve their release variants for it.
+
+It shares `:app`'s application id rather than taking a suffix. A suffix is the tidier-looking
+choice and the wrong one — the benchmark drives `com.astracare` by package name, and a second
+install means measuring whichever the system resolves.
+
+## 15.3 `profileable` is confined to that build type, deliberately
+
+Macrobenchmark needs the target process to be `profileable android:shell="true"`: readable by
+the shell without being debuggable. The obvious place for the tag is the main manifest, which
+merges into every variant — and that is precisely why it is in `app/src/benchmark/` instead.
+
+`profileable` in a release build exposes method-level traces of a process whose screens show a
+child's name, age and village. Day 16 spent a day making that data hard to read from outside
+the app; a tag added for convenience would have quietly undone part of it. The flag is not a
+catastrophe on its own, and that is exactly the kind of "not on its own" that accumulates.
+
+## 15.4 The first frame of this app is a spinner, so TTID is the wrong number
+
+`StartupTimingMetric` reports time-to-initial-display and time-to-full-display. TTID — the
+first frame — is what "cold start" usually means, and for this app it means almost nothing.
+
+The database is encrypted. Starting up means unwrapping a Keystore-wrapped passphrase, opening
+SQLCipher, and letting Room answer a query, none of which has happened when the first frame
+lands. That frame is a `CircularProgressIndicator`. Optimising TTID here would be optimising how
+fast a health worker can be shown a loading indicator.
+
+So `BeneficiaryListScreen` now calls `ReportDrawnWhen { !isRefreshing }`, and TTFD becomes the
+metric. This puts an Activity API (`androidx.activity.compose`) into a feature module, which is
+worth a second look before accepting. The alternative was hoisting a "ready" signal up to `:app`
+so `MainActivity` could call `reportFullyDrawn()` — which would put a performance concern into
+the navigation shell and couple it to one screen's load state. The screen is the only thing that
+knows when it is ready; the dependency goes where the knowledge is.
+
+TTID is still recorded. The **gap** between the two is the isolated cost of opening an encrypted
+database, which is the figure to produce if the SQLCipher decision (10.1) is ever challenged on
+performance grounds. Before today that cost was an assumption.
+
+## 15.5 Two bounds instead of one number
+
+`StartupBenchmark` runs twice: `CompilationMode.None()` and `CompilationMode.Full()`.
+
+Neither is a user experience. `None` wipes all AOT code so everything starts interpreted; `Full`
+compiles everything ahead of time, which is more than a baseline profile will ever produce,
+because a profile compiles only the startup path on purpose to keep the APK small.
+
+They bracket the answer, and the bracket is what makes Day 22 meaningful. The question then is
+not "how much faster than `None`" — it is **what share of the `None` → `Full` gap the profile
+recovered**. A profile closing 70% of a 300 ms gap is a good profile. A profile closing 70% of a
+20 ms gap is a rounding error about to be written on a CV as a percentage. Measuring against
+`None` alone cannot distinguish them, which is exactly how the unfalsifiable claim gets made in
+good faith.
+
+## 15.6 What these numbers will not be
+
+Written down before the first run, so it cannot be quietly dropped afterwards:
+
+- **Not release numbers.** The `benchmark` type inherits `release`'s disabled R8, so the APK is
+  unminified. Every figure is an upper bound, and enabling R8 invalidates all of them rather
+  than shifting them predictably.
+- **Not the whole distribution.** `StartupMode.COLD` kills the process between iterations but
+  does not clear app data, so iteration 1 creates the database and generates the Keystore key
+  and the other nine do not. Ten iterations dilute it into the median; three would not, which
+  is why the iteration count is recorded next to every figure in `docs/PERFORMANCE.md`.
+- **Not portable.** One device is one data point, and this app's honest target is a mid-range
+  phone several years old — a flagship's numbers say very little about it.
+- **Not from an emulator.** An emulator shares the host's scheduler, thermals and page cache.
+  Its startup times move when the laptop compiles something in another window.
+
+`docs/PERFORMANCE.md` is the table these get recorded in, with the device, build type,
+iteration count and commit beside them. A number without those four is not a measurement, and
+the point of writing the file before the run is that the blanks are visible.
+
+---
 
 ## Open items
 
@@ -2344,7 +2529,7 @@ What it does prove is the wiring, which is the one thing no unit test in this pr
 | `android.disallowKotlinSourceSets=false` required — KSP registers generated sources via `kotlin.sourceSets`, which AGP 9 rejects (3.5) | Third-party tooling gap | When KSP supports AGP 9 built-in Kotlin |
 | ~~Conflict-resolution strategy (last-write-wins vs vector clocks)~~ | **Resolved** — neither: detection keyed on `SyncStatus`, no clock comparison (9.1) | Closed |
 | ~~SQLCipher vs Jetpack Security for field-level encryption~~ | **Resolved** — SQLCipher over the whole database (10.1); Jetpack Security turned out to be deprecated (10.2) | Closed |
-| Cold-start numbers before/after Baseline Profile | Not yet measured | With the benchmark module |
+| Cold-start numbers before/after Baseline Profile | Instrument built (Part 15); the "before" reading is pending a physical device. `docs/PERFORMANCE.md` holds the method and the empty table | Day 21 run, then Day 22 for the "after" |
 | MVI marker interfaces live in `:feature:patients/mvi` (5.1) | Deliberate — one consumer | Move to `:core:ui` at the second feature module |
 | ~~No Compose UI yet for either MVI screen~~ | **Resolved** — both screens built, `MainActivity` no longer renders the template (Part 6) | Closed |
 | ~~No end-to-end test: nothing asserts the module boundaries line up~~ | **Resolved** — `CaptureToHistoryTest` on Robolectric, so it runs in `./gradlew test` (14.1, 14.2). Covers the Hilt graph, nav on an effect, and the capture → list round trip | Closed |
@@ -2352,7 +2537,7 @@ What it does prove is the wiring, which is the one thing no unit test in this pr
 | Validation bounds are stated twice: `BeneficiaryValidator` and `strings.xml` (6.8) | Accepted — the alternative is unlocalisable sentence fragments. Day 18 pinned the domain half with boundary tests, so a bound that moves now breaks a test; the string still has to be updated by hand | When the ranges next change |
 | ~~History list is a plain `LazyColumn`, not Paging~~ | **Resolved** — Paging 3 over Room (Part 7) | Closed |
 | ~~No SQL is tested: the `CASE` ordering, the conditional updates, `INSERT OR IGNORE`, the append-only triggers and all four migrations~~ | **Resolved as written, not as running** — `BeneficiaryDaoTest` and `MigrationTest` cover all of it (14.5, 14.6), including the fresh-install trigger path and a 1→4 chain carrying a PENDING record. Both are instrumented, so 4.5 still keeps them out of CI | An instrumented CI lane — the remaining half |
-| `CASE`-based ordering cannot use an index (7.2) | Correct at one health worker's scale | With the benchmark work, as an indexed rank column + backfill migration |
+| `CASE`-based ordering cannot use an index (7.2) | Correct at one health worker's scale, and now measurable — the query sits inside TTFD (15.4) | An indexed rank column + backfill migration, if TTFD ever says it matters |
 | Paging's error/retry branch is unimplemented (7.3) | Still true, and the Day 12 prediction was wrong: the pull is a use case, not a `RemoteMediator` (9.4), so nothing in the Paging path ever touches the network and `LoadState.Error` stays unreachable | Only if paging ever becomes network-backed — otherwise never |
 | No test that the Worker maps the summaries to the right WorkManager Result (8.1, 9.8) | The algorithms are covered; the adapter — including "an interrupted push skips the pull" — is not. Named for Days 18-20 and not done in any of them | With `work-testing`, as its own piece of work |
 | A CONFLICTED record is a visible dead end — no merge UI (9.3) | Deliberate: detection without resolution loses nothing, and a wrong auto-merge is invisible | A field-level resolution screen, sized as its own day |
@@ -2369,8 +2554,8 @@ What it does prove is the wiring, which is the one thing no unit test in this pr
 | The SQLCipher passphrase stays in heap for the life of the process (10.5) | `SupportOpenHelperFactory` keeps the array and offers no way to clear it; verified in the library source, not assumed | Nothing to do without a change upstream — it bounds the threat model rather than being a bug |
 | API 24-27 get no `setUnlockedDeviceRequired` (10.4) | The flag is API 28+. Those devices still get Keystore-bound encryption, just not the locked-device guarantee | Whenever minSdk rises to 28 |
 | `EncryptedDatabaseTest` is instrumented, so it is outside CI (4.5, 10.8) | Unchanged, and it now has company: the migration and DAO tests written on Day 20 are instrumented too (14.8). The Keystore has no JVM implementation, so there is no Robolectric path for this one | An instrumented CI lane |
-| SQLCipher adds ~4MB of native library per ABI, unmeasured (10.1) | Accepted for the security it buys; no ABI split or app bundle configuration yet | With the benchmark work, alongside the cold-start numbers |
-| R8 is disabled — `optimization { enable = false }` in `app/build.gradle.kts` | Predates Day 16 and was not in its scope. A release build is therefore unshrunk and unobfuscated, and the modules' `keepRules` directories are unexercised | Its own day; enabling R8 blind on a Hilt + Room + Paging graph is not a ten-minute change |
+| SQLCipher adds ~4MB of native library per ABI, unmeasured (10.1) | Size still unmeasured; its *startup* cost is now isolated as TTFD − TTID (15.4), which was an assumption until Day 21 | APK size with an ABI split or app bundle, as its own piece |
+| R8 is disabled — `optimization { enable = false }` in `app/build.gradle.kts` | Now also a measurement problem: the `benchmark` build type inherits it, so every figure in `docs/PERFORMANCE.md` is an upper bound and enabling R8 invalidates rather than shifts them (15.6) | Its own day; enabling R8 blind on a Hilt + Room + Paging graph is not a ten-minute change |
 | The audit trail records a role, not a person (11.5) | There is no authentication, and the role is switchable by whoever holds the phone. `ROLE_CHANGED` makes tampering visible, not impossible | Server-side audit from an authenticated principal — needs a real backend (4.2) |
 | The audit write is not atomic with the save it describes (11.8) | A crash between them loses the entry and keeps the record, which is the right way round. A client-side transaction would make it reliable, not authoritative | With a server that records what it receives |
 | ~~No migration test for 3→4, and the append-only triggers are untested (11.3)~~ | **Resolved** — both paths: the migration one in `MigrationTest`, the fresh-install one in `BeneficiaryDaoTest` against a Room-built schema with the production callback (14.5) | Closed |
@@ -2381,6 +2566,10 @@ What it does prove is the wiring, which is the one thing no unit test in this pr
 | Robolectric renders no pixels (14.8) | Composition and semantics only. Layout overlap, clipped text and undersized touch targets are invisible to `CaptureToHistoryTest` | Screenshot testing (Paparazzi or Roborazzi), as its own decision |
 | `app/src/sharedTest` is wired into both test source sets by hand | Not an AGP convention — two `kotlin.srcDir` lines in `app/build.gradle.kts`. A new module needing shared doubles repeats them | Move into a convention plugin at the second module that needs it |
 | Robolectric downloads an `android-all` runtime on first run | An offline or firewalled CI agent fails with a download error rather than a test failure. The SDK level is pinned below `compileSdk` for the same reason | Prefetch the runtime in the CI cache if it ever bites |
+| Benchmarks are outside CI and always will be (15.1) | Deliberate, unlike the Day 20 instrumented tests. A benchmark's output is a number, and a number from shared CI hardware is a number about that hardware | Never — re-run by hand after any change to startup, the Hilt graph or the database open path |
+| The `benchmark` build type shares `:app`'s application id (15.2) | Required: the benchmark drives `com.astracare` by name, and a suffix would mean two installs and an ambiguous target. The cost is that it replaces a development install | Nothing to do; noted so the replaced install is not a surprise |
+| `ReportDrawnWhen` puts an Activity API in a feature module (15.4) | Accepted — the screen is the only thing that knows when it is ready, and the alternative couples the navigation shell to one screen's load state | Revisit if a second screen ever needs to report readiness |
+| No frame-timing benchmark for the history list | Cold start was the day's scope. Scroll jank on a long list — with the `CASE` ordering and Paging underneath — is a separate measurement and a separate metric | Its own day, with `FrameTimingMetric` |
 | Mutation testing is a scratch script, not part of the build (12.5, 13.4) | Run by hand two days running, and it found a real gap both times — most recently a test asserting a *consequence* of idempotence rather than idempotence itself. Nothing in CI stops the next test from being one that cannot fail | Kotlin support in the available plugins is thin enough to be its own decision |
 | ~~`MockRemoteBeneficiarySource` is asserted only through its consumers (12.6)~~ | **Resolved** — 16 direct tests (13.2), unblocked by the logging seam | Closed |
 | The `Logger` seam could enforce the no-PII-in-logs rule *structurally* and does not (10.10, 13.1, 14.4) | Narrowed — `PiiLoggingTest` now drives the real paths with unmistakable PII and inspects the whole cause chain, so this is mechanical rather than a hand audit. It still proves the paths it drives, not every future call site; a typed or redacting `Logger` would | When there is a redaction requirement, or a crash reporter to route through |

@@ -40,6 +40,10 @@ gradlePlugin {
             id = "astracare.android.library"
             implementationClass = "AndroidLibraryConventionPlugin"
         }
+        register("androidTestModule") {
+            id = "astracare.android.test"
+            implementationClass = "AndroidTestModuleConventionPlugin"
+        }
         register("androidCompose") {
             id = "astracare.android.compose"
             implementationClass = "AndroidComposeConventionPlugin"

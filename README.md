@@ -102,6 +102,7 @@ reports 21, but it moves on Studio updates — a standalone JDK is the more stab
 ./gradlew test                   # includes the Robolectric end-to-end UI test
 ./gradlew connectedDebugAndroidTest   # migration, DAO and encryption tests; needs a device
 ./gradlew detekt                 # static analysis + ktlint rules
+./gradlew :macrobenchmark:connectedBenchmarkAndroidTest   # cold start; physical device only
 ./gradlew detekt --auto-correct  # fix what can be fixed automatically
 ```
 
@@ -120,7 +121,7 @@ git config core.hooksPath   # should print .githooks
 **In place**
 
 - Seven-module structure with compiler-enforced layer boundaries
-- `build-logic` included build with five capability-scoped convention plugins; SDK and Java
+- `build-logic` included build with eight capability-scoped convention plugins; SDK and Java
   levels defined once
 - Version catalog covering the full dependency set
 - Hilt graph bootstrapped, with injected coroutine dispatchers for testability
@@ -134,11 +135,13 @@ git config core.hooksPath   # should print .githooks
   that no personally identifying information reaches the log
 - Instrumented tests for every migration, the `CASE` ordering, the conditional writes and the
   append-only triggers — written, and runnable on demand rather than in CI
+- `:macrobenchmark` module measuring cold start against both compilation bounds, with
+  `reportFullyDrawn` wired so the metric is the frame carrying records rather than the spinner
 
 **Next**
 
+- Baseline Profile, and the before/after delta as a share of the measured headroom
 - An instrumented CI lane, so the database tests run on every push rather than on request
-- Macrobenchmark module with baseline profiles
 - R8 enabled for release builds
 
 ## Design decisions
@@ -147,6 +150,10 @@ git config core.hooksPath   # should print .githooks
 choice and the alternative rejected — including why the domain modules are Kotlin/JVM, why
 convention plugins live in an included build rather than `buildSrc`, and why Room 2.x was
 chosen over the newer `room3`.
+
+**[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** holds the measured numbers and the conditions
+that produced them — device, build type, iteration count and commit beside every figure, on the
+principle that a number missing any of those is not a measurement.
 
 ## Deliberate scope boundaries
 

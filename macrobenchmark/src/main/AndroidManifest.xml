@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Instrumentation-only manifest.
+
+  No <application> of its own: this APK exists to host test code that drives another process.
+  The permission below is what lets UiAutomator and the benchmark library read the target's
+  timing from the system rather than from inside it, which is the whole reason a macrobenchmark
+  is trustworthy in a way an in-process measurement is not.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+</manifest>

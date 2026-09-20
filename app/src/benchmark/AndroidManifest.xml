@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Source-set manifest for the `benchmark` build type only. Merged into that variant and into
+  no other.
+
+  `profileable` lets the shell — and therefore the macrobenchmark library — read this process's
+  traces and simpleperf samples without the app being debuggable. That combination is the whole
+  point: debuggable would let us measure but would change what we are measuring.
+
+  Why it is here and not in the main manifest: main merges into every variant, so a
+  `profileable` tag there would ship in release. The flag is not a catastrophe on its own, but
+  it exposes method-level traces of an app whose screens show a child's name, age and village,
+  and Day 16 spent a day making that data hard to read from outside the process. Confining it
+  to a build type nobody ships keeps that work intact.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <profileable
+            android:shell="true"
+            tools:targetApi="29" />
+    </application>
+
+</manifest>

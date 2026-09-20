@@ -64,4 +64,7 @@ include(":core:designsystem")   // Compose M3 theme + shared components
 
 include(":feature:patients")    // capture screen, history list, MVI ViewModel
 
-// :macrobenchmark is added alongside the performance work
+// A com.android.test module: instrumentation only, installed beside :app and driving it from
+// a separate process. Day 21. Never built by CI — it needs a physical device, and a number
+// measured on an emulator is a number about the host machine.
+include(":macrobenchmark")
