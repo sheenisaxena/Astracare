@@ -1838,6 +1838,151 @@ constraint chosen before it is needed rather than discovered after.
 
 ---
 
+# Part 12 — Testing what was never tested, and checking the tests can fail
+
+Day 18. The plan's entry reads: *"Unit tests: ViewModel with fake repository + TestDispatcher.
+Use-case tests with boundary values (empty, max, malformed measurement)."*
+
+## 12.1 Half the day was already done, which is worth saying rather than re-doing
+
+Both ViewModels have been tested against hand-written fakes on a `TestDispatcher` since Day 10,
+and the use cases have been tested as they were written — push, pull, conflict resolution,
+audit, permissions. Eighty-three tests existed before this day started.
+
+Arriving at a planned testing day and finding the work already absorbed into earlier days is a
+good outcome and a slightly awkward one: the honest options are to write a second set of
+ViewModel tests so the day has an artefact, or to find what is actually untested and test that.
+
+What was actually untested:
+
+- **`BeneficiaryValidator` had no test at all.** The densest concentration of clinical
+  judgement in the codebase, on the path every record takes. `ValidationError`'s own
+  documentation asserted that "tests assert on `WeightOutOfRange` rather than on prose" — a
+  claim about tests that did not exist.
+- **`:core:data` had no `test` source set.** Every test in that module was instrumented, so its
+  pure functions — the mappers, the defensive enum decoding — were covered by nothing CI runs
+  (4.5).
+- **`Outcome` had no test.** Twelve lines that every failure in the app travels through.
+
+So the day is the plan's second half, aimed at the gaps.
+
+**Concept — a plan entry is a hypothesis about where the work will be.** Re-checking it on the
+day is cheaper than executing it faithfully.
+
+## 12.2 A range check has four interesting values
+
+`in a..b` is inclusive at both ends, so for each bound there are exactly four values worth
+asserting — just below the minimum, the minimum, the maximum, just above — and one that is
+not, which is anything in the middle.
+
+The bug this catches is `<` written where `<=` was meant. It passes every test using a
+plausible 12.4 kg and fails only at 0.5. Every bound in the validator now has its four values,
+and the property being pinned is not that the numbers are right — they are a clinical decision
+the validator's own comments defend — but that the code implements the range it claims to.
+
+Two assertions are not about any single field:
+
+- **Every failure is reported, not just the first.** The documented behaviour is that a health
+  worker sees everything wrong at once. A `return` added during a refactor removes that, and
+  nothing else in the suite would notice.
+- **Validation ignores what it does not own.** Sync status and timestamps are set by the sync
+  engine, and a record arriving from a pull with `CONFLICTED` status and extreme timestamps
+  must validate cleanly. Pinned so a well-meant "validate everything" change has to argue with
+  a test rather than quietly reject records the app produced itself.
+
+## 12.3 NaN is handled correctly by accident, which is why it needs a test
+
+`Double.NaN !in 0.5..300.0` is `true`, because every comparison involving NaN is false. So the
+validator rejects a NaN weight and does so without anyone having thought about it.
+
+That makes it fragile in a specific way: rewriting the check as
+`weight < MIN || weight > MAX` — which most people would call a clarification — silently starts
+**accepting** NaN. And a NaN weight in the database can never again be compared, sorted or
+summed; it poisons every aggregate it touches and the row looks fine.
+
+The test asserts the current behaviour so the rewrite has to fail before it ships. The mutation
+check below confirms it does.
+
+## 12.4 Three defensive decoders, each choosing which way to be wrong
+
+`:core:data` decodes an enum out of a TEXT column in three places, and all three fall back
+rather than throw. The reason is the same each time: a row written by a *newer* build — after a
+downgrade, or a partially applied migration — must not crash the app, because the app is the
+only thing that can send a health worker's unsynced records anywhere.
+
+What is interesting is that each fallback is a decision about the direction of the error, and
+until Day 18 all three were comments:
+
+| Unreadable value | Falls back to | Because |
+|---|---|---|
+| Sync status | `PENDING` | The record is re-offered to the server. `SYNCED` would mark data as safe when nothing had sent it. |
+| Session role | `FIELD_WORKER` | The least privileged role, so an unreadable session grants less access, never more. |
+| Audit actor | `FIELD_WORKER` | The trail must not attribute an action to more authority than it can evidence. |
+| Audit action | `RECORD_UPDATED` | Something happened to a record and this build cannot say what. `CONFLICT_DETECTED` would raise an alarm nothing raised; dropping the row would hide an event that occurred. |
+
+None of these is reachable without writing the raw value by hand, which is exactly why they
+went unverified: they guard a case only production produces.
+
+Each also has a companion test that walks the whole enum and asserts a clean round trip. Without
+it, a genuinely new status would land in the fallback, decode as something plausible, and every
+test would still pass.
+
+## 12.5 The mutation check, and what it found about itself
+
+A suite that passes proves the code does *something*. It does not prove the tests would notice
+if the code did something else. So eight mutations were applied to the code this day covers,
+one at a time, and the suite was run against each.
+
+Seven were caught:
+
+- `isBlank()` → `isEmpty()` (the whitespace-only name)
+- the age range's maximum made exclusive
+- the weight range's minimum made exclusive
+- the range check rewritten as `< MIN || > MAX` (the NaN case in 12.3)
+- the MUAC null check inverted, so absence became a validation failure
+- the unknown-sync-status fallback changed from `PENDING` to `SYNCED`
+- the unknown-role fallback changed from `FIELD_WORKER` to `SUPERVISOR`
+
+One survived, and it should have. `Outcome.map` returns `this` on the failure branch; mutating
+it to `Outcome.Failure(error)` allocates a new instance that compares equal to the old one,
+because `Failure` is a data class. No caller can tell the difference, so no test can. That is an
+**equivalent mutant** — a textbook category — and the honest response is to leave it
+unkilled and say why, not to write an assertion on object identity.
+
+### The harness lied to me first
+
+The first run reported *two* survivors. The second was the inverted MUAC check, and it had not
+survived at all — it had failed to compile, because removing the null guard breaks the smart
+cast that `MuacOutOfRange(muac)` depends on. The harness looked for "N tests failed", found no
+such line, and concluded the mutation was uncaught.
+
+A verification tool that cannot distinguish *"no test caught this"* from *"this did not build"*
+reports false coverage gaps, and a false coverage gap sends someone hunting for a test that
+cannot exist. The harness now reports three outcomes, and the mutation was rewritten into a form
+that compiles — at which point it was caught immediately.
+
+**Concept — the thing checking your work needs checking too**, and its failure mode is the more
+expensive one, because it is trusted by default.
+
+## 12.6 What is still untested, stated rather than implied
+
+This day closed the JVM-side gaps. It did not close these, and the open items table now says so:
+
+- **The SQL.** The `CASE` ordering, the conditional updates, the `INSERT OR IGNORE`, the
+  append-only triggers, the four migrations. All of it needs a real database, which means
+  instrumentation, which CI does not run (4.5). The strongest claims in the project have the
+  weakest automated coverage, and that is the honest shape of it.
+- **The Worker's mapping of summaries to `WorkManager.Result`**, including "an interrupted push
+  skips the pull" (9.8). Needs `work-testing`.
+- **`MockRemoteBeneficiarySource`.** Its idempotent re-accept, deterministic failure cadence and
+  delta pull are all asserted only through the use cases that consume it. Day 19's entry names
+  the mock remote layer directly.
+- **Mutation testing is a script in a scratch directory, not part of the build.** It was run
+  by hand for this day's code and is not wired into CI; Kotlin support in the available
+  mutation-testing plugins is limited enough that adopting one is its own decision.
+
+---
+
 ## Open items
 
 | Item | Status | Resolve by |
@@ -1852,9 +1997,9 @@ constraint chosen before it is needed rather than discovered after.
 | MVI marker interfaces live in `:feature:patients/mvi` (5.1) | Deliberate — one consumer | Move to `:core:ui` at the second feature module |
 | ~~No Compose UI yet for either MVI screen~~ | **Resolved** — both screens built, `MainActivity` no longer renders the template (Part 6) | Closed |
 | ~~Theme lives in `:app` while `:core:designsystem` is empty~~ | **Resolved** — moved, with spacing tokens and `StatusChip` (6.1, 6.2) | Closed |
-| Validation bounds are stated twice: `BeneficiaryValidator` and `strings.xml` (6.8) | Accepted — the alternative is unlocalisable sentence fragments | When the ranges next change |
+| Validation bounds are stated twice: `BeneficiaryValidator` and `strings.xml` (6.8) | Accepted — the alternative is unlocalisable sentence fragments. Day 18 pinned the domain half with boundary tests, so a bound that moves now breaks a test; the string still has to be updated by hand | When the ranges next change |
 | ~~History list is a plain `LazyColumn`, not Paging~~ | **Resolved** — Paging 3 over Room (Part 7) | Closed |
-| The SQL `ORDER BY` has no test; only the domain half of the contract is pinned (7.2, 7.6) | Needs an instrumented test against a real database | Days 18-20 |
+| No SQL is tested: the `CASE` ordering, the conditional updates, `INSERT OR IGNORE`, the append-only triggers and all four migrations (7.2, 7.6, 10.8, 11.3, 12.6) | All need a real database, so all need instrumentation, which CI does not run (4.5). The project's strongest claims have its weakest automated coverage | Day 20, or an instrumented CI lane |
 | `CASE`-based ordering cannot use an index (7.2) | Correct at one health worker's scale | With the benchmark work, as an indexed rank column + backfill migration |
 | Paging's error/retry branch is unimplemented (7.3) | Still true, and the Day 12 prediction was wrong: the pull is a use case, not a `RemoteMediator` (9.4), so nothing in the Paging path ever touches the network and `LoadState.Error` stays unreachable | Only if paging ever becomes network-backed — otherwise never |
 | No test that the Worker maps the summaries to the right WorkManager Result (8.1, 9.8) | The algorithms are covered; the adapter — including "an interrupted push skips the pull" — is not | Days 18-20, with `work-testing` |
@@ -1880,3 +2025,5 @@ constraint chosen before it is needed rather than discovered after.
 | Client RBAC hides affordances and refuses actions; it secures nothing (4.3, 11.2) | Stated in the README and next to the code. The role is on the device and the device belongs to the user | Server-side authorisation on every request |
 | `audit_log` grows without bound and is never pruned | One line per save on a table nobody deletes from — and deletion is impossible by design (11.3), so pruning needs a deliberate mechanism rather than a `DELETE` | When a real deployment's volume is known; likely a server-side archive plus a local retention window |
 | DPDP: children's data attracts enhanced protections this app does not implement | Beneficiaries are children under five. Verifiable parental consent, and the consent notice and retention machinery around it, are absent | Out of scope for a portfolio build; named in the README rather than implied to be handled |
+| Mutation testing is a scratch script, not part of the build (12.5) | Run by hand over Day 18's code: eight mutations, seven caught, one a documented equivalent mutant. Nothing stops the next test from being one that cannot fail | Kotlin support in the available plugins is thin enough to be its own decision |
+| `MockRemoteBeneficiarySource` is asserted only through its consumers (12.6) | Its idempotent re-accept, deterministic failure cadence and delta pull have no direct test | Day 19, which names the mock remote layer |

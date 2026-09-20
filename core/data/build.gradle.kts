@@ -39,4 +39,9 @@ dependencies {
 
     // androidTest, not test: MigrationTestHelper and in-memory Room need instrumentation.
     androidTestImplementation(libs.room.testing)
+
+    // Day 18. This module's `test` source set exists now, and it holds the pure functions
+    // that were previously covered only by instrumented tests — which CI does not run
+    // (DECISION_LOG 4.5). The mappers and the defensive enum decoding need no device.
+    testImplementation(libs.coroutines.test)
 }
