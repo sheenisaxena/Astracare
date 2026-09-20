@@ -1,5 +1,7 @@
 package com.astracare.di
 
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
 import androidx.paging.PagingData
 import com.astracare.core.common.Outcome
 import com.astracare.core.domain.repository.BeneficiaryRepository
@@ -53,10 +55,35 @@ class FakeBeneficiaryRepository @Inject constructor() : BeneficiaryRepository {
      * It also does not sort. Ordering moved into SQL on Day 12, so a fake that sorted in
      * Kotlin would make a test pass while the query it stands in for was wrong — the one
      * failure mode a fake must not hide. Ordering is covered by `RecordAttentionOrderTest`
-     * and, eventually, a migration-style test against a real database.
+     * and `BeneficiaryDaoTest` against a real database.
+     *
+     * ## The load states are not optional, and the single-argument overload is a trap
+     *
+     * `PagingData.from(list)` — the obvious call, and what this used from Day 8 to Day 20 —
+     * leaves every `LoadState` as `Loading`, **permanently**. The screen reads
+     * `loadState.refresh is LoadState.Loading` to decide between a spinner and the empty state
+     * (deliberately, because `itemCount == 0` is also true before the first page arrives), so
+     * with that overload the list renders a spinner forever and never shows a record.
+     *
+     * Nothing caught it for twelve days because no test had ever rendered the screen; the
+     * overload is deprecated and the build had been saying so in a warning nobody read. The
+     * first run of `CaptureToHistoryTest` timed out waiting for an empty state that could not
+     * arrive. DECISION_LOG 14.10.
+     *
+     * `endOfPaginationReached = true` on all three because this fake holds the whole table:
+     * there is no page after it, and claiming otherwise would have the list ask for one.
      */
     override fun pagedRecords(): Flow<PagingData<Beneficiary>> =
-        records.map { PagingData.from(it.values.toList()) }
+        records.map { all ->
+            PagingData.from(
+                data = all.values.toList(),
+                sourceLoadStates = LoadStates(
+                    refresh = LoadState.NotLoading(endOfPaginationReached = true),
+                    prepend = LoadState.NotLoading(endOfPaginationReached = true),
+                    append = LoadState.NotLoading(endOfPaginationReached = true),
+                ),
+            )
+        }
 
     override fun observeAwaitingSyncCount(): Flow<Int> =
         records.map { all -> all.values.count { it.syncStatus != SyncStatus.SYNCED } }
