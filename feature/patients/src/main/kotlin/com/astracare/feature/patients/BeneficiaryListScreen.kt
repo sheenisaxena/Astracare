@@ -25,6 +25,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -117,10 +119,25 @@ internal fun BeneficiaryListScreen(
         },
         floatingActionButton = {
             if (permissions.canCaptureRecord) {
+                // The label has to be repeated as a contentDescription, and that is not
+                // belt-and-braces. ExtendedFloatingActionButton wraps its `text` slot in
+                // `clearAndSetSemantics {}` — Material's accessibility contract puts the
+                // button's name on the `icon` slot, because normally the icon is the thing
+                // that needs describing and the text would only duplicate it. This FAB has no
+                // icon, so the label was cleared and nothing replaced it: the merged semantics
+                // node carried Role=Button, an OnClick, and no name at all. TalkBack announced
+                // "button".
+                //
+                // Found by `CaptureToHistoryTest`, not by reading the code — see DECISION_LOG
+                // 14.9. `StatusChip` uses `clearAndSetSemantics` deliberately and sets a
+                // description; here Material used it on our behalf and the slot we left empty
+                // was the one holding the name.
+                val addRecord = stringResource(R.string.list_action_add)
                 ExtendedFloatingActionButton(
                     onClick = { onIntent(BeneficiaryListIntent.AddRecordClicked) },
-                    text = { Text(stringResource(R.string.list_action_add)) },
+                    text = { Text(addRecord) },
                     icon = {},
+                    modifier = Modifier.semantics { contentDescription = addRecord },
                 )
             }
         },
