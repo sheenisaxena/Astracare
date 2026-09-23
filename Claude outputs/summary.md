@@ -3,359 +3,224 @@
 Working notes from the build sessions. Private: git-excluded via `.git/info/exclude`, so it
 never reaches the public repo.
 
-**As of 17-Sep-2026** · repo `github.com/sheenisaxena/Astracare` (public) · 63 Kotlin files ·
-Days 10–13 written to disk. **Nothing pushed yet** — the Day 12 build failed on a stale test
-file that must be deleted first (section 8).
+**As of 20-Sep-2026** · repo `github.com/sheenisaxena/Astracare` (public) · Days 14–23 written
+to disk · Day 24 (system design drill 1) in progress.
+
+> Replaces the 17-Sep version. Nothing lost that matters — the Day 10–13 detail it carried now
+> lives in `docs/DECISION_LOG.md` Parts 7–9.
 
 ---
 
 ## 1. Where the plan stands
 
-Master plan: `AstraCare_Master_Plan.xlsx` (5 sheets — Daily Plan, Progress Matrix, Flagship
-Checklist, Reconciliation, Target Module Map).
+Master plan: `AstraCare_Master_Plan.xlsx` (Daily Plan, Progress Matrix, Flagship Checklist,
+Reconciliation, Target Module Map).
 
 | Day | Work | Status |
 |---|---|---|
 | 1–4 | Repo hygiene, catalog + Hilt, convention plugins, detekt + CI | Done |
-| 5–6 | **Job search** — resume, referrals, applications | **Skipped** |
-| 7 | Domain layer | Done |
-| 8 | Cross-module Hilt graph + test seam | Done |
-| 9 | Room as single source of truth | Done |
-| 10 | MVI — both ViewModels, pure reducers, 19 unit tests | Done |
-| 11 | Compose UI, design system, Room-backed autosave, nav shell | Done |
-| 12 | Paging 3 over Room, ordering moved into SQL | Done |
-| 13 | Sync push: :core:sync, WorkManager, mock remote | **Done** |
-| 14 | **Sync pull + conflict resolution — next up** | Pending |
-| 15 | **MOCK INTERVIEW + applications** — protect this one | Pending |
-| 16–32 | Security, testing, perf, docs, interview prep | Pending |
+| 5–6 | Job search | Running in parallel, off-plan |
+| 7–13 | Domain, Hilt graph, Room, MVI, Compose UI, Paging, sync push | Done |
+| 14 | Sync pull + conflict resolution | **Done** |
+| 15 | Mock interview + applications | Running in parallel, off-plan |
+| 16 | SQLCipher encryption + Keystore | **Done** |
+| 17 | RBAC + append-only audit trail | **Done** |
+| 18 | Unit tests — validator, mappers, defensive decoding | **Done** |
+| 19 | Logging seam, mock-server tests, MockK where it earns its place | **Done** |
+| 20 | End-to-end Compose test, PII log audit, migration + DAO tests | **Done** |
+| 21 | `:macrobenchmark` module, cold start before any profile | **Done, unmeasured** |
+| 22 | Baseline profile generator, `Partial(Require)` benchmark | **Done, unmeasured** |
+| 23 | README build-out, architecture diagram, `docs/BUILDING.md` | **Done** |
+| 24 | **System design drill 1 — offline-first sync engine** | **In progress** |
+| 25–26 | System design drills 2 and 3 | Pending |
+| 27–32 | Remaining interview prep and polish | Pending |
 
-**Honest status on schedule.** Eleven build days complete out of 32. Day 11 absorbed three
-things the plan had scattered — the UI day, the DataStore integration the Reconciliation sheet
-folded in, and the inline navigation it cut as a standalone day — so it ran well over its
-2-hour box. Worth it: the app is now demonstrable end to end.
-
-**The one real risk, unchanged and compounding:** Days 5, 6 and 15 are the entire job-search
-allocation before Week 4 and all three are still unstarted, now six weeks past their dates.
-Referral replies lag 1–2 weeks, so this is lead time being spent rather than banked. The
-plan's own rule is *cut flagship features, never interview prep*.
-
-Days 13–14 are the sync engine, which is the single most differentiating thing in this
-project and the hardest to cut. Day 15 is a mock interview and an applications batch, and it
-sits immediately after them. That is the one to protect.
+Ten build days completed in this session. The app is demonstrable end to end and the
+documentation is in a state a reviewer can navigate.
 
 ---
 
-## 2. What exists now
+## 2. What got built, day by day
 
-### Modules (7 + build-logic)
+### Day 14 — sync pull and conflict resolution (37 files)
 
-```
-:app                  MainActivity, AstraCareApp (inline 2-destination nav)
-:feature:patients     MVI + Compose: capture form, paged history list, effect observer
-:core:sync            WorkManager push worker + scheduler (pull lands Day 14)
-:core:data            Room DB v2, paged DAO, beneficiaries + capture_draft, migration, repos
-:core:domain          repository + remote + scheduler INTERFACES, use cases, validation
-:core:model           Beneficiary, Measurement, SyncStatus, Timestamp, CaptureDraft
-:core:common          Outcome, TimeProvider, DI modules
-:core:designsystem    theme, spacing/sizing tokens, StatusChip
-```
+`ConflictResolver` is the centrepiece and the thing to talk about in interviews. It keys
+detection on **`SyncStatus`, never on comparing clocks** — client wall-clock time is not
+monotonic, and a device whose clock is wrong silently wins or loses every conflict. Delta pulls
+use an **opaque `SyncCursor`**, not a timestamp, so a server change stamped behind the device's
+own clock cannot be skipped. `PushBeneficiariesWorker` became `SyncBeneficiariesWorker`.
+DECISION_LOG Part 9.
 
-`:core:model`, `:core:common`, `:core:domain` are **Kotlin/JVM, not Android** — the Android SDK
-is not on their classpath, so `import android.*` in the domain layer does not compile.
+### Day 16 — encryption at rest (13 files)
 
-### Paging
+SQLCipher over the whole database, not the two PII columns — column encryption leaves indexes,
+the WAL and the free list readable. The passphrase is wrapped by an Android Keystore AES-GCM key
+with `setUnlockedDeviceRequired` on API 28+. No `fallbackToDestructiveMigration`, so a key that
+is gone with the blob still present is fatal rather than silently destructive.
+`allowBackup=false`, `FLAG_SECURE` on non-debuggable builds. Jetpack Security turned out to be
+deprecated. DECISION_LOG Part 10, including the threat model.
 
-The history list is a `PagingSource` over Room, 30 rows a page, placeholders off, `cachedIn`
-the ViewModel. Sort order moved out of Kotlin and into the query — the rule still lives in
-`:core:domain` as `RecordAttentionOrder` and the DAO binds its values into an `ORDER BY CASE`.
-The Day 10 sealed `Loading | Empty | Content` is gone; Paging's own `LoadState` replaced it.
+### Day 17 — roles and audit trail (37 files)
 
-### Sync
+`RolePermissions` is a nested exhaustive `when` with no `else`, so a new role or capability fails
+the build at the one place that must have an opinion. Append-only enforced by **SQLite triggers
+installed from both the migration and a `RoomDatabase.Callback.onCreate`** — Room runs no
+migration on a fresh install, so a migration-only version of the guarantee holds on upgraded
+devices and silently fails on new ones. DECISION_LOG Part 11.
 
-A saved record is pushed within seconds: the repository enqueues unique one-time work after
-each successful local write, and an hourly periodic pass sweeps anything missed. The mock
-server accepts idempotently, rejects permanently, and fails transiently every fifth call so
-retry and backoff are exercisable on a real device.
+### Days 18–19 — tests, and a logging seam that unblocked them
 
-`SyncStatus` gained **REJECTED** — a permanent refusal is neither FAILED (retryable) nor
-CONFLICTED (server has a newer version). No migration needed: the column stores the enum name.
+Boundary tests for the validator (including NaN and infinity), mapper and defensive-decoding
+tests. Then Day 19 found that `MockRemoteBeneficiarySource` could not be unit-tested because it
+called `android.util.Log` directly — so `Logger` went into `:core:common` with the Android
+implementation in `:app`. Rejected Robolectric there: a large dependency to avoid writing a
+thirty-line interface. Parts 12 and 13.
 
-### The app runs a flow
+**Mutation testing found two real gaps** that reading the code did not, on two consecutive days.
+The better one: `accepted.put` → `putIfAbsent` survived, because the idempotence test asserted
+record *count*, which `putIfAbsent` also satisfies while silently discarding every later edit.
+Idempotent upsert and ignore-if-present are different guarantees.
 
-Launch → record list (Loading / Empty / Content) → **Add record** → capture form → Save →
-back to the list with the record visible and a sync chip on it. System back works. The form
-autosaves and survives the app being killed.
+### Day 20 — the end-to-end test, and the two bugs it found
 
-`MainActivity` no longer renders `Greeting("Android")`.
+`CaptureToHistoryTest` runs on **Robolectric**, deliberately, so it is in `./gradlew test` rather
+than an instrumented lane CI does not run. Day 19 rejected Robolectric and this is not a
+reversal — different problem, no alternative here.
 
-### Database
+It failed on its first two runs, and both failures were real:
 
-Version **2**. `beneficiaries` plus `capture_draft` (single row, all-TEXT columns), added by a
-hand-written `MIGRATION_1_2`. No `fallbackToDestructiveMigration`, so a missing migration
-fails loudly rather than deleting unsynced field data.
+1. **The FAB had no accessible name.** `ExtendedFloatingActionButton` wraps its `text` slot in
+   `clearAndSetSemantics {}` — Material's contract puts the button's name on the `icon` slot,
+   and we passed `icon = {}`. TalkBack announced "button". 152 unit tests, a design system that
+   gets this right in `StatusChip`, and twelve days of reading all missed it.
+2. **`FakeBeneficiaryRepository` had reported "still loading" since Day 8.**
+   `PagingData.from(list)` — the single-argument, *deprecated* overload — leaves every
+   `LoadState` as `Loading` permanently, so the list rendered a spinner forever. The build had
+   been printing the deprecation warning for twelve days.
 
-### Quality gates
+Also written: `MigrationTest` (every migration, the 1→4 chain carrying a PENDING record, and a
+`DATABASE_VERSION - 1 == ALL_MIGRATIONS.size` drift guard), `BeneficiaryDaoTest` (the `CASE`
+ordering, both conditional writes, `INSERT OR IGNORE`, triggers on the fresh-install path) and
+`PiiLoggingTest` (drives real paths with unmistakable PII, inspects the whole cause chain).
+Parts 14, 14.9 and 14.10.
 
-| Gate | When | Bypassable |
-|---|---|---|
-| `.githooks/pre-commit` → detekt | every commit | yes (`--no-verify`) |
-| `.githooks/pre-push` → unit tests | every push | yes |
-| GitHub Actions CI | every push / PR | no |
-| Branch protection | — | **not enabled yet** |
+### Days 21–22 — the instrument, then the thing it measures
 
-46 unit tests. `:core:domain` now carries 13 of them — the ordering guard plus the push loop,
-including the stale-write case that has no visible symptom.
+`:macrobenchmark` is a `com.android.test` module driving `:app` from a separate process, with a
+`benchmark` build type in `:app` (release settings, debug signing, not debuggable). `profileable`
+lives in `app/src/benchmark/AndroidManifest.xml`, **not** the main manifest — main merges into
+every variant, and a release build exposing method traces of a process showing a child's name
+would have undone part of Day 16.
 
-### Versions pinned
+**The first frame of this app is a spinner**, so TTID measures how fast a loading indicator
+appears. `BeneficiaryListScreen` now calls `ReportDrawnWhen { !isRefreshing }` and TTFD is the
+metric. TTID is still recorded because TTFD − TTID isolates the cost of the encryption decision.
 
-Kotlin 2.2.10 · AGP 9.3.1 · Gradle 9.5 · JDK 21 · compileSdk 37 / minSdk 24 ·
-KSP 2.2.10-2.0.2 · Hilt 2.59.2 · Room 2.8.4 · detekt 1.23.8
-New on Day 11: `lifecycle-runtime-compose`, `hilt-navigation-compose`.
-New on Day 12: `paging-common` (in `:core:domain`), `room-paging`, `paging-compose`.
-New on Day 13: `work-runtime-ktx`, `androidx-hilt-work`, `androidx-hilt-compiler` — all already
-in the catalog, applied for the first time.
+Day 22 added `BaselineProfileGenerator` (launch **and** the first interaction — a startup-only
+profile makes the app open fast and hang on the first tap), `profileinstaller`, and
+`CompilationMode.Partial(BaselineProfileMode.Require)`. `Require` over `UseIfAvailable` because
+the latter reports a number with no profile installed, which turns noise into a CV bullet.
 
----
+Three compilation modes, not one: `None` is the floor, `Full` the ceiling, and the honest figure
+is **share of available headroom**, not "Δ vs None". Parts 15 and 16.
 
-## 3. Decisions worth being able to defend
+### Day 23 — documentation audit
 
-Full reasoning with rejected alternatives: **`docs/DECISION_LOG.md`** (committed, public) —
-796 lines, Parts 5 and 6 are Days 10 and 11.
+The ASCII architecture diagram had been **wrong since Day 3**: it showed `:feature:patients` and
+`:core:sync` depending on `:core:data`. Neither does. Replaced with `docs/architecture.svg`,
+drawn from the actual `project(":...")` declarations, showing the compiler-enforced Kotlin/JVM
+line, UI and infrastructure as two columns, and `:app`'s dashed edges (Hilt bindings for types it
+never names).
 
-### Carried forward
-
-**Domain modules are Kotlin/JVM.** Compiler-enforced layering beats documented convention.
-
-**Capability-scoped convention plugins.** Compose isn't applied to `:core:data`, so a
-`@Composable` cannot leak into the data layer — it wouldn't compile.
-
-**`Timestamp` = epoch millis in a value class.** `java.time` needs desugaring below API 26;
-kotlinx-datetime 0.7+ aliases to experimental types KSP cannot resolve.
-
-**`syncStatus` as enum NAME, not ordinal** · **`@Upsert`, not `@Insert(REPLACE)`** ·
-**no `fallbackToDestructiveMigration`** · **injected dispatchers and `TimeProvider`** ·
-**repository interface in domain, impl in data** (swapping in-memory for Room changed one
-`@Binds` line) · **fake, not mock** · **client wall-clock time is not trustworthy** (Kronos is
-the production remedy, deliberately not adopted).
-
-### Day 10 — MVI
-
-**No `MviViewModel<S, I, E>` base class; three marker interfaces.** The capture form *owns*
-its state (`MutableStateFlow` + reducer); the list *derives* its state from a Room `Flow`
-(`map` + `stateIn`, no mutable holder). A base class holding a `MutableStateFlow` would force
-the list to keep a second copy of the truth.
-
-**Sealed `UiState` for the list, data class for the form.** Loading/Empty/Content genuinely
-exclude each other, and the old `StateFlow<List<Beneficiary>>` could not tell "no records"
-from "not asked yet". A form has no exclusive modes. "Always sealed" is advice that's wrong
-half the time.
-
-**Effects via `Channel(BUFFERED)` + `receiveAsFlow()`.** `SharedFlow(replay = 0)` drops events
-with no collector; `replay = 1` re-navigates on return; a flag in state fires again on
-rotation; `consumeAsFlow()` dies with the first collector.
-
-**Two reducer entry points, not one sealed hierarchy.** `reduce(CaptureIntent)` for what the
-user did, `reduce(SaveOutcome)` for what the save reported, `SaveOutcome` internal. The
-textbook single hierarchy would make `dispatch(SaveSucceeded)` legal for a composable.
-
-**Parse errors are the UI's, range errors are the domain's.** A test asserts `"400"` maps
-*successfully*, pinning the boundary so it can't drift.
-
-### Day 11 — UI, design system, drafts
-
-**Drafts go in Room, not DataStore — and that overrides the plan.** The Reconciliation sheet
-had pencilled in DataStore. Same durability, but it costs a second persistence stack for one
-object: another thing to migrate, another thing to encrypt on Day 16, another place to look
-when data goes missing. Choosing it would have bought a resume keyword at the cost of a worse
-system. `SavedStateHandle` was rejected outright — it doesn't survive a flat battery, which
-is the case that actually happens.
-
-**The migration overload is a trap worth knowing.** Room 2.7 added
-`migrate(SQLiteConnection)` alongside `migrate(SupportSQLiteDatabase)`; both are open and
-**both throw `NotImplementedError` by default**. Override the wrong one and it compiles, looks
-complete, and crashes on the first upgrade. `databaseBuilder` without `setDriver` uses the
-framework driver, so `SupportSQLiteDatabase` is correct here.
-
-**Autosave: debounced 400ms, restore strictly before the collector starts, cleared explicitly
-on save.** If the collector started first it would write the blank initial state and the
-restore would recover a draft it had already destroyed. `distinctUntilChanged` runs on the
-mapped draft, not the state, so focus changes and error clearing don't restart the timer.
-
-**Spacing tokens make a lint rule work for the architecture.** `MagicNumber` is active
-project-wide and excludes only the design-system directories, so a literal `16.dp` in a
-feature module is a build failure. The cheapest path through CI is the one that uses a token.
-The alternative — adding feature paths to the exclude list — would have killed the rule to
-solve a problem the design system solves anyway.
-
-**The design system doesn't know what a beneficiary is.** `StatusChip` takes a `String` and a
-`StatusTone`, not a `SyncStatus`. Three decisions would otherwise sit in the wrong module:
-that CONFLICTED is critical while FAILED is only a warning, that FAILED reads "Retrying"
-rather than "Failed", and what any of it is called in Hindi.
-
-**Dynamic colour removed, not carried over.** This app uses colour semantically for sync
-state; a wallpaper-derived palette can't be contrast-checked at build time, and it's
-Android 12+ against minSdk 24.
-
-**No Navigation Compose at two destinations.** `BackHandler` plus `rememberSaveable` with a
-hand-written `Saver` do what a `NavHost` would. The line to watch: the first destination that
-takes an argument — the record detail screen — is where the library wins.
-
-**Route/Screen split on every screen.** The stateless half previews and UI-tests with no Hilt
-graph. `ObserveEffects` uses `repeatOnLifecycle(STARTED)`, because a bare `LaunchedEffect`
-keeps collecting from the back stack and fires navigation the user can't see.
-
-### Day 13 — sync push
-
-**The algorithm is a use case; the Worker is ten lines.** A `CoroutineWorker` can't be built
-without a `Context`, so logic inside one is testable only under instrumentation. This is the
-code that can lose field data, so it lives where plain JUnit reaches it — seven tests, no
-Android.
-
-**The stale write.** Between reading a record and marking it sent, the health worker can edit
-it. An unconditional `SET sync_status = 'SYNCED'` then claims the *new* version reached the
-server when only the old one did — the row reads SYNCED, the chip is grey, the edit is gone,
-and nothing looks wrong. The mark is conditional on `updated_at` being unchanged, and every
-fake in the suite enforces the same condition.
-
-**REJECTED, and the Day 12 guard paying for itself.** `RecordAttentionOrderTest` failed on a
-constant and pointed straight at the DAO's `CASE`, which nothing in the type system connects
-to the Kotlin enum. The exhaustive `when` in `SyncStatusPresentation` caught the UI half at
-compile time.
-
-**`pendingSync` narrowed to retryable.** "Not SYNCED" also matches REJECTED and CONFLICTED, so
-the old query had the handset re-pushing refused records forever. They still count toward the
-sync banner — "what should we send" and "what isn't safe yet" are different questions.
-
-**A transient failure stops the whole pass.** It's almost always the connection, not the
-record, so the next forty attempts fail identically — battery and radio a field handset can't
-spare. A permanent rejection does the opposite and the loop continues.
-
-**`ExistingWorkPolicy.KEEP`, not REPLACE.** REPLACE would throw away a worker two minutes into
-its backoff and restart the curve — the opposite of what backoff is for.
-
-**Device-minted IDs pay off twice.** They made offline creation possible on Day 7; they're also
-what makes retrying a lost response safe, because the server upserts by a key it didn't choose.
-
-**Three pieces that only work together.** `@HiltWorker` + the KSP processor + `Configuration.
-Provider` with the manifest initializer removed. Any one missing fails at *runtime* with a
-message naming the worker rather than the cause.
+Thirty lines of `JAVA_HOME` troubleshooting moved to `docs/BUILDING.md`. Added a "Read this repo
+in ten minutes" section naming five files and why each matters. Part 17.
 
 ---
 
-## 4. Problems hit, and what they taught
+## 3. Verification state
 
-| Problem | Cause | Fix |
-|---|---|---|
-| `Can't find module entity for Astracare.app` | `rootProject.name` changed mid-project | Reverted. **Never bundle a cosmetic rename with a structural refactor** |
-| `kotlin.sourceSets DSL is not allowed` | KSP registers generated sources via `kotlin.sourceSets`, which AGP 9 rejects | Kept `android.disallowKotlinSourceSets=false` |
-| `'Clock' could not be resolved` (KSP) | kotlinx-datetime 0.7 typealiases to experimental `kotlin.time` | Dropped for `Timestamp` + `TimeProvider` |
-| detekt `ImportOrdering` ×6 | ktlint layout is `*, java, javax, kotlin` — `javax` goes **after** `kotlinx` | Reordered |
-| **D10:** detekt `ComplexCondition` on form mapping | A four-way null guard written to enable smart casting | Split into `parseMeasurement()` + `malformedFields()`. Better anyway: no `!!`, and every bad field is named |
-| **D10:** detekt `MatchingDeclarationName` | `CaptureReducer.kt`'s only top-level class was `SaveOutcome` | Moved it into `CaptureContract.kt`, where the other message types live. The rule found a real misplacement |
-| **D11:** `Expecting a top level declaration` in a KDoc | Wrote a detekt glob inside a comment — the `*/` in it **closed the comment early** | Rephrased. Caught only because the file was actually compiled; reading it would never have found it |
-| **D11:** detekt `SpreadOperator` on `addMigrations(*ALL_MIGRATIONS)` | Spread copies the array per call | `ALL_MIGRATIONS` became a `List`, registered with `forEach`. Also the better type — arrays compare by identity |
-| **D11:** detekt `MatchingDeclarationName` again | `StatusTone` alone in `StatusChip.kt` | Own file. Right anyway — consumers use the tone without the chip |
+- **152 JVM tests pass** in the offline harness; 155 once the three Robolectric tests run.
+- **detekt clean** at `maxIssues: 0` against the project's real `config/detekt/detekt.yml`.
+- **All eight harness stages green** — including type checks for the instrumented tests, the
+  shared test doubles, the Robolectric test and `:macrobenchmark`.
+- **Never executed here:** the three Robolectric tests since the last fix, anything
+  instrumented, and both benchmark runs.
 
-Also corrected along the way: Hilt is **2.59.2**, not the 2.57.1 the docs page reports;
-`gradle/actions` is at **v6**; `actions/setup-java` is at **v5**.
+The harness lives in the cloud session, not the repo: `verify.sh` (8 stages), `sync-detekt.sh`
+plus a `detektcheck` Gradle project, and `mutate.sh`. It will not survive indefinitely.
 
 ---
 
-## 5. What was verified, and what wasn't
+## 4. Outstanding — things only you can do
 
-Worth being precise about, because "it compiles" was assumed on earlier days and is not
-assumed here.
+**Blocking a clean build:**
 
-**Verified:** all domain, model, MVI, reducer and sync code compiles under Kotlin 2.2.10
-against real `paging-common` and WorkManager 2.11.2 classes. All **46 unit tests pass**, including autosave debounce timing on
-virtual time. Every Compose file type-checks clean against real Compose 1.12.1 / Material3
-1.4.0 / paging-compose 3.5.0 artifacts and a real `android.jar` — zero unresolved references.
-**detekt 1.23.8 with the project's own `config/detekt/detekt.yml` and the formatting plugin is
-clean across all 70 files.**
+1. **Delete** `app/src/androidTest/kotlin/com/astracare/di/TestDataModule.kt` and
+   `FakeBeneficiaryRepository.kt`. They moved to `src/sharedTest/` and the duplicates break the
+   `androidTest` compile.
+2. **Delete** `core/sync/.../PushBeneficiariesWorker.kt`. Not a compile error — it is dead code —
+   but WorkManager stores worker class *names*, so stale periodic work enqueued before Day 14
+   keeps instantiating it and never pulls.
+3. **Delete** `app/src/test/kotlin/com/astracare/SemanticsDumpTest.kt` once
+   `CaptureToHistoryTest` is green. It was diagnostic scaffolding.
 
-**Not verified — run the build before trusting these:**
+**Blocking tests from running:**
 
-- **The Hilt graph — now the biggest unknown.** Day 13 added `@HiltWorker` (assisted
-  injection), a new KSP processor in `:core:sync`, `SyncModule`, `WorkManagerModule`, and two
-  injected fields on the Application. None of it can be checked without a real build, and all
-  of it fails at runtime rather than compile time.
-- **Whether WorkManager actually uses `HiltWorkerFactory`.** If the manifest edit is wrong the
-  build stays green and the first push crashes with "Could not instantiate
-  PushBeneficiariesWorker".
-- **Room codegen and the migration SQL.** The `CREATE TABLE` is hand-matched to what Room
-  generates for `DraftEntity`. Room validates it at open time and aborts on any mismatch, so
-  if it's wrong it will be obvious immediately — on a device that already holds a v1 database.
-- **Compose codegen.** Type-checking passed; the Compose compiler plugin itself couldn't run
-  in the verification harness, so `@Composable` call-context rules are unchecked.
-- **Nothing has been rendered on a screen.** Layout, spacing and contrast are unreviewed.
-- **The `ORDER BY CASE` query.** Room compiles and validates it, but nothing checks it returns
-  rows in the intended order. `RecordAttentionOrderTest` pins only the domain half.
-- **The KMP variant split.** `:core:domain` compiles against `paging-common-desktop` while the
-  app ships `-android`. Routine, but it surfaces as a `NoSuchMethodError` rather than a build
-  failure if it does go wrong.
+4. **Recover `2.json` and `3.json`** into `core/data/schemas/`. Only `1.json` was ever committed
+   and a build exports only the current version, so they come from git history — the recipe is in
+   `MigrationTest`'s KDoc. Every test in that file fails until they exist, and hand-writing them
+   will not work: the JSON carries an identity hash Room computes from the entities.
 
-```
-./gradlew detekt test assembleDebug
-```
+**Pending measurement:**
+
+5. Run `.\gradlew.bat :app:testDebugUnitTest` and confirm the three Robolectric tests pass.
+6. Generate the baseline profile, commit it to `app/src/main/baseline-prof.txt`, then run all
+   three compilation modes and fill in `docs/PERFORMANCE.md`. Both tables are empty.
+   `coldStartBaselineProfile` fails by design until that profile exists.
+7. Record screens — the `adb screenrecord` and `ffmpeg` commands are in a comment in the README's
+   Screens section.
+
+**Environment note:** PowerShell needs `.\gradlew.bat`, not `./gradlew`.
 
 ---
 
-## 6. Known gaps
+## 5. Conventions in force
 
-- **Days 5–6 job search not started** — six weeks overdue, and still the highest-priority item
-- **Branch protection off** — CI detects, doesn't prevent
-- **No instrumented or Compose UI tests** (Days 18–20). Two now compete for highest value: a
-  `MigrationTestHelper` test for `MIGRATION_1_2`, and a DAO test asserting the paged
-  `ORDER BY` actually returns attention-order. The migration can destroy data; the ordering
-  can be wrong in a way nothing notices
-- **No tests in `:core:data`.** The mapper round-trip
-  (`assertEquals(entity, entity.toDomain().toEntity())`) is still the cheapest first one
-- Paging's error/retry branch is unimplemented — a local database cannot fail a load, so it
-  waits for RemoteMediator on Days 13–14
-- Validation bounds are stated twice: `BeneficiaryValidator` and `strings.xml`. Accepted; the
-  alternative is unlocalisable sentence fragments
-- No logging abstraction — `RoomDraftRepository` calls `android.util.Log` directly
-- Record detail screen doesn't exist; tapping a row does nothing
-- MVI markers live in `:feature:patients/mvi`; they move to `:core:ui` at the second feature
-- GitHub repo has no **description or topics** set
-- `misc file` commit message is public; cleaning it needs a force-push (not worth it)
+- Build → `./gradlew detekt test assembleDebug` → commit with a body **naming the rejected
+  alternative** → push → append to `docs/DECISION_LOG.md`.
+- Commit trailers: `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` and `Claude-Session:`.
+- Git hooks self-install on Gradle sync: detekt on commit, tests on push.
+- Every decision-log part states what the day does **not** prove, written before the numbers
+  exist so a disappointing result cannot quietly drop it.
 
 ---
 
-## 7. Next session — Day 14 (sync pull + conflict resolution)
+## 6. Stack facts worth having to hand
 
-The other direction: fetch server changes, detect conflicts, resolve them. This is the day the
-project's hardest claim gets made, so the decision log entry matters as much as the code —
-"why last-write-wins over vector clocks" is a question that gets asked.
+Kotlin 2.2.10 · AGP 9.3.1 · JDK 21 · Gradle 9.5 · compileSdk 37 / minSdk 24 · Room 2.8.4 ·
+Paging 3.5.0 · Work 2.11.2 · Hilt 2.59.2 · SQLCipher 4.19.0 · Robolectric 4.17 · benchmark 1.4.1
+· detekt 1.23.8.
 
-Three things Day 13 left deliberately for Day 14:
+Eight modules; `:core:model`, `:core:common` and `:core:domain` are Kotlin/JVM (`java-library`),
+so `import android.*` in the domain layer is a compile error. Eight convention plugins in
+`build-logic`. R8 is **off** — a standing open item, and the reason every benchmark figure will
+be an upper bound.
 
-- **`SyncStatus.CONFLICTED` is never set by anything.** Push cannot produce a conflict; only a
-  pull can discover one.
-- **Sync failures are invisible.** A record just sits PENDING. Day 14 has the UI surface.
-- **Paging's error/retry branch** becomes reachable once a pull can fail — that's when the
-  LoadState UI deferred on Day 12 earns its place.
+---
 
-Watch for: `Timestamp` comparison is the conflict rule, and DECISION_LOG 2.6 already records
-that client wall-clock time is not trustworthy (Kronos is the noted remedy, deliberately not
-adopted). Restate that limit honestly rather than presenting timestamp comparison as sound.
+## 7. Day 24 — in progress
 
-**Then protect Day 15.** Mock interview plus an applications batch. It is the first job-search
-day in six weeks that has not already slipped, and it sits directly after the hardest build day
-in the plan — which is exactly the position from which days get skipped.
+System design drill 1: *design an offline-first sync engine*. Running as a **mock interview** — I
+play a staff engineer at a health-tech company. Brief: 200k devices growing to a million, 30–80
+records a day at ~2 KB, sync gaps of hours to days, records edited after creation, supervisors
+correcting them on a web dashboard, health data about children.
 
-**Standing workflow per day:** build → `./gradlew detekt test assembleDebug` → commit with a
-body that names the rejected alternative → push → append to `docs/DECISION_LOG.md`.
+The trap to avoid is answering by narrating AstraCare. Several things an interviewer will push on
+— tombstones and deletes, multi-writer conflicts on one record, cursor expiry and full resync —
+are *open items* in the decision log precisely because the small version did not need them. The
+senior answer is "here is what I built, here is what changes at that scale, and here is why the
+small version was correct for its constraints."
 
-## 8. Files to delete by hand — BLOCKING THE BUILD
-
-Neither the bridge nor I can delete on your disk. Both are still present:
-
-- `feature/patients/src/test/kotlin/com/astracare/feature/patients/BeneficiaryListUiStateTest.kt`
-  — tests `toUiState()`, removed on Day 12. **This is what failed your last push.**
-- `app/src/main/kotlin/com/astracare/ui/theme/` — three files, dead since Day 11.
-
-```bash
-git rm feature/patients/src/test/kotlin/com/astracare/feature/patients/BeneficiaryListUiStateTest.kt
-git rm -r app/src/main/kotlin/com/astracare/ui/theme
-```
+The strongest material is the reasoning, not the architecture: sync status over clocks, opaque
+cursors over timestamps, refusing destructive migration fallback. Each is a failure mode that can
+be named out loud.
